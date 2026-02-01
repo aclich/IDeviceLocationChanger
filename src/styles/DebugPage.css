@@ -1,0 +1,345 @@
+.debug-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 16px;
+  gap: 12px;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  overflow: hidden;
+}
+
+.debug-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #333;
+}
+
+.debug-header h2 {
+  margin: 0;
+  font-size: 18px;
+  color: #fff;
+}
+
+.connection-status {
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.connection-status.connected {
+  background: #1a472a;
+  color: #4ade80;
+}
+
+.connection-status.disconnected {
+  background: #472a2a;
+  color: #f87171;
+}
+
+/* Preset Commands */
+.debug-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.preset-btn {
+  padding: 6px 12px;
+  background: #2a2a4a;
+  border: 1px solid #444;
+  border-radius: 6px;
+  color: #a0a0ff;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.preset-btn:hover {
+  background: #3a3a5a;
+  border-color: #666;
+}
+
+/* Input Section */
+.debug-input-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.debug-input-section label {
+  font-size: 12px;
+  color: #888;
+  text-transform: uppercase;
+}
+
+.debug-input {
+  width: 100%;
+  padding: 12px;
+  background: #0d0d1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+  color: #e0e0e0;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-size: 13px;
+  resize: vertical;
+  min-height: 80px;
+}
+
+.debug-input:focus {
+  outline: none;
+  border-color: #60a5fa;
+}
+
+.debug-input-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.send-btn {
+  padding: 8px 20px;
+  background: #3b82f6;
+  border: none;
+  border-radius: 6px;
+  color: white;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.send-btn:hover {
+  background: #2563eb;
+}
+
+/* Section Headers */
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.section-header label {
+  font-size: 12px;
+  color: #888;
+  text-transform: uppercase;
+}
+
+.clear-btn {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: #888;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.clear-btn:hover {
+  background: #333;
+  color: #fff;
+}
+
+/* Output Section */
+.debug-output-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-height: 150px;
+}
+
+.debug-output {
+  flex: 1;
+  background: #0d0d1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 12px;
+  overflow-y: auto;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-size: 12px;
+}
+
+.empty-state {
+  color: #555;
+  text-align: center;
+  padding: 20px;
+}
+
+.output-item {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #222;
+}
+
+.output-item:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.output-item.pending {
+  opacity: 0.7;
+}
+
+.output-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.output-time {
+  color: #666;
+  font-size: 11px;
+}
+
+.output-method {
+  color: #60a5fa;
+  font-weight: 600;
+}
+
+.output-duration {
+  color: #4ade80;
+  font-size: 11px;
+}
+
+.output-pending {
+  color: #fbbf24;
+  font-size: 11px;
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.output-request,
+.output-response {
+  margin-top: 8px;
+}
+
+.output-request .label,
+.output-response .label {
+  display: block;
+  color: #666;
+  font-size: 10px;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.output-request pre,
+.output-response pre {
+  margin: 0;
+  padding: 8px;
+  background: #151525;
+  border-radius: 4px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.output-response.success pre {
+  border-left: 3px solid #4ade80;
+}
+
+.output-response.error pre {
+  border-left: 3px solid #f87171;
+}
+
+/* Log Section */
+.debug-log-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 200px;
+  flex-shrink: 0;
+}
+
+.debug-log {
+  flex: 1;
+  background: #0a0a15;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 8px;
+  overflow-y: auto;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-size: 11px;
+}
+
+.log-item {
+  display: flex;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid #1a1a2a;
+}
+
+.log-item:last-child {
+  border-bottom: none;
+}
+
+.log-time {
+  color: #555;
+  flex-shrink: 0;
+}
+
+.log-type {
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.log-type.request {
+  background: #1e3a5f;
+  color: #60a5fa;
+}
+
+.log-type.response {
+  background: #1a472a;
+  color: #4ade80;
+}
+
+.log-type.event {
+  background: #3d2a5f;
+  color: #c084fc;
+}
+
+.log-type.error {
+  background: #5f1e1e;
+  color: #f87171;
+}
+
+.log-content {
+  color: #aaa;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Scrollbar styling */
+.debug-output::-webkit-scrollbar,
+.debug-log::-webkit-scrollbar {
+  width: 8px;
+}
+
+.debug-output::-webkit-scrollbar-track,
+.debug-log::-webkit-scrollbar-track {
+  background: #1a1a2e;
+}
+
+.debug-output::-webkit-scrollbar-thumb,
+.debug-log::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 4px;
+}
+
+.debug-output::-webkit-scrollbar-thumb:hover,
+.debug-log::-webkit-scrollbar-thumb:hover {
+  background: #444;
+}
