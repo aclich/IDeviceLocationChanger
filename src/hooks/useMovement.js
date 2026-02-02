@@ -95,6 +95,7 @@ export function useMovement({ location, setLocation }) {
         if (distance < ARRIVAL_THRESHOLD_KM) {
           // Snap to target and stop
           await setLocation(target.latitude, target.longitude);
+          setCruiseTarget(null); // Clear target so map icon is removed
           stopMovementLoop();
           return;
         }
