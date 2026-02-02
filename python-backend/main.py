@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Optional
 
 from models import Device
-from services import DeviceManager, LocationService, TunnelManager
+from services import DeviceManager, LocationService, TunnelManager, FavoritesService
 
 # Configure logging to stderr (stdout is for JSON-RPC communication)
 logging.basicConfig(
@@ -45,6 +45,7 @@ class LocationSimulatorServer:
         self.devices = DeviceManager()
         self.location = LocationService()
         self.tunnel = TunnelManager()
+        self.favorites = FavoritesService()
 
         # State
         self._selected_device: Optional[Device] = None
@@ -59,6 +60,12 @@ class LocationSimulatorServer:
             "startTunnel": self._start_tunnel,
             "stopTunnel": self._stop_tunnel,
             "getTunnelStatus": self._get_tunnel_status,
+            # Favorites
+            "getFavorites": self._get_favorites,
+            "addFavorite": self._add_favorite,
+            "updateFavorite": self._update_favorite,
+            "deleteFavorite": self._delete_favorite,
+            "importFavorites": self._import_favorites,
         }
 
         logger.info("Location Simulator Backend initialized")
@@ -180,6 +187,56 @@ class LocationSimulatorServer:
     async def _get_tunnel_status(self, params: dict) -> dict:
         """Get current tunnel status."""
         return self.tunnel.get_status()
+
+    # =========================================================================
+    # Favorites Operations
+    # =========================================================================
+
+    async def _get_favorites(self, params: dict) -> dict:
+        """Get all favorite locations."""
+        favorites = self.favorites.get_all()
+        return {"favorites": [f.to_dict() for f in favorites]}
+
+    async def _add_favorite(self, params: dict) -> dict:
+        """Add a new favorite location."""
+        latitude = params.get("latitude")
+        longitude = params.get("longitude")
+        name = params.get("name", "")
+
+        if latitude is None or longitude is None:
+            return {"success": False, "error": "latitude and longitude required"}
+
+        return self.favorites.add(float(latitude), float(longitude), name)
+
+    async def _update_favorite(self, params: dict) -> dict:
+        """Update (rename) a favorite location."""
+        index = params.get("index")
+        name = params.get("name")
+
+        if index is None:
+            return {"success": False, "error": "index required"}
+        if name is None:
+            return {"success": False, "error": "name required"}
+
+        return self.favorites.update(int(index), name)
+
+    async def _delete_favorite(self, params: dict) -> dict:
+        """Delete a favorite location."""
+        index = params.get("index")
+
+        if index is None:
+            return {"success": False, "error": "index required"}
+
+        return self.favorites.delete(int(index))
+
+    async def _import_favorites(self, params: dict) -> dict:
+        """Import favorites from a file."""
+        file_path = params.get("filePath")
+
+        if not file_path:
+            return {"success": False, "error": "filePath required"}
+
+        return self.favorites.import_from_file(file_path)
 
     # =========================================================================
     # Main Loop (stdio mode)

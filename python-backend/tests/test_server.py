@@ -12,7 +12,8 @@ def server():
     """Create a server instance with mocked services."""
     with patch("main.DeviceManager") as MockDeviceManager, \
          patch("main.LocationService") as MockLocationService, \
-         patch("main.TunnelManager") as MockTunnelManager:
+         patch("main.TunnelManager") as MockTunnelManager, \
+         patch("main.FavoritesService") as MockFavoritesService:
 
         server = LocationSimulatorServer()
 
@@ -20,6 +21,7 @@ def server():
         server.devices = MockDeviceManager.return_value
         server.location = MockLocationService.return_value
         server.tunnel = MockTunnelManager.return_value
+        server.favorites = MockFavoritesService.return_value
 
         yield server
 
@@ -251,3 +253,123 @@ class TestTunnelOperations:
 
         assert response["result"]["running"] is True
         assert response["result"]["address"] == "127.0.0.1"
+
+
+class TestFavoritesOperations:
+    """Tests for favorites-related RPC methods."""
+
+    async def test_get_favorites(self, server):
+        mock_favorite = MagicMock()
+        mock_favorite.to_dict.return_value = {
+            "latitude": 25.033,
+            "longitude": 121.565,
+            "name": "Taipei 101",
+        }
+        server.favorites.get_all = MagicMock(return_value=[mock_favorite])
+
+        request = {"id": "1", "method": "getFavorites", "params": {}}
+        response = await server.handle_request(request)
+
+        assert "favorites" in response["result"]
+        assert len(response["result"]["favorites"]) == 1
+        assert response["result"]["favorites"][0]["name"] == "Taipei 101"
+
+    async def test_get_favorites_empty(self, server):
+        server.favorites.get_all = MagicMock(return_value=[])
+
+        request = {"id": "1", "method": "getFavorites", "params": {}}
+        response = await server.handle_request(request)
+
+        assert response["result"]["favorites"] == []
+
+    async def test_add_favorite_success(self, server):
+        server.favorites.add = MagicMock(return_value={
+            "success": True,
+            "favorite": {"latitude": 25.033, "longitude": 121.565, "name": "Taipei"},
+        })
+
+        request = {
+            "id": "1",
+            "method": "addFavorite",
+            "params": {"latitude": 25.033, "longitude": 121.565, "name": "Taipei"}
+        }
+        response = await server.handle_request(request)
+
+        assert response["result"]["success"] is True
+        server.favorites.add.assert_called_once_with(25.033, 121.565, "Taipei")
+
+    async def test_add_favorite_missing_coords(self, server):
+        request = {"id": "1", "method": "addFavorite", "params": {"name": "Test"}}
+        response = await server.handle_request(request)
+
+        assert response["result"]["success"] is False
+        assert "latitude" in response["result"]["error"]
+
+    async def test_update_favorite_success(self, server):
+        server.favorites.update = MagicMock(return_value={
+            "success": True,
+            "favorite": {"latitude": 25.033, "longitude": 121.565, "name": "New Name"},
+        })
+
+        request = {
+            "id": "1",
+            "method": "updateFavorite",
+            "params": {"index": 0, "name": "New Name"}
+        }
+        response = await server.handle_request(request)
+
+        assert response["result"]["success"] is True
+        server.favorites.update.assert_called_once_with(0, "New Name")
+
+    async def test_update_favorite_missing_index(self, server):
+        request = {"id": "1", "method": "updateFavorite", "params": {"name": "Test"}}
+        response = await server.handle_request(request)
+
+        assert response["result"]["success"] is False
+        assert "index" in response["result"]["error"]
+
+    async def test_update_favorite_missing_name(self, server):
+        request = {"id": "1", "method": "updateFavorite", "params": {"index": 0}}
+        response = await server.handle_request(request)
+
+        assert response["result"]["success"] is False
+        assert "name" in response["result"]["error"]
+
+    async def test_delete_favorite_success(self, server):
+        server.favorites.delete = MagicMock(return_value={"success": True})
+
+        request = {"id": "1", "method": "deleteFavorite", "params": {"index": 0}}
+        response = await server.handle_request(request)
+
+        assert response["result"]["success"] is True
+        server.favorites.delete.assert_called_once_with(0)
+
+    async def test_delete_favorite_missing_index(self, server):
+        request = {"id": "1", "method": "deleteFavorite", "params": {}}
+        response = await server.handle_request(request)
+
+        assert response["result"]["success"] is False
+        assert "index" in response["result"]["error"]
+
+    async def test_import_favorites_success(self, server):
+        server.favorites.import_from_file = MagicMock(return_value={
+            "success": True,
+            "imported": 5,
+        })
+
+        request = {
+            "id": "1",
+            "method": "importFavorites",
+            "params": {"filePath": "/path/to/file.txt"}
+        }
+        response = await server.handle_request(request)
+
+        assert response["result"]["success"] is True
+        assert response["result"]["imported"] == 5
+
+    async def test_import_favorites_missing_path(self, server):
+        request = {"id": "1", "method": "importFavorites", "params": {}}
+        response = await server.handle_request(request)
+
+        assert response["result"]["success"] is False
+        assert "filePath" in response["result"]["error"]

@@ -1,9 +1,11 @@
 import { useState, useCallback, useMemo } from 'react';
 import { useBackend } from './hooks/useBackend';
 import { useMovement } from './hooks/useMovement';
+import { useFavorites } from './hooks/useFavorites';
 import { MapWidget } from './components/MapWidget';
 import { DevicePanel } from './components/DevicePanel';
 import { ControlPanel } from './components/ControlPanel';
+import { FavoritesManager } from './components/FavoritesManager';
 import { DebugPage } from './components/DebugPage';
 import { distanceBetween } from './utils/coordinateCalculator';
 import './styles/App.css';
@@ -41,8 +43,19 @@ function App() {
     setSpeed,
   } = useMovement({ location, setLocation });
 
+  // Favorites management
+  const {
+    favorites,
+    isLoading: favoritesLoading,
+    addFavorite,
+    updateFavorite,
+    deleteFavorite,
+    importFavorites,
+  } = useFavorites();
+
   const [pendingLocation, setPendingLocation] = useState(null);
   const [showDebug, setShowDebug] = useState(false);
+  const [showFavoritesManager, setShowFavoritesManager] = useState(false);
 
   const handleMapClick = useCallback((lat, lng) => {
     setPendingLocation({ latitude: lat, longitude: lng });
@@ -73,6 +86,17 @@ function App() {
   const handleStopCruise = useCallback(() => {
     stopCruise();
   }, [stopCruise]);
+
+  // Favorites handlers
+  const handleFavoriteSelect = useCallback((favorite) => {
+    setPendingLocation({ latitude: favorite.latitude, longitude: favorite.longitude });
+  }, []);
+
+  const handleSaveFavorite = useCallback(async () => {
+    if (location) {
+      await addFavorite(location.latitude, location.longitude);
+    }
+  }, [location, addFavorite]);
 
   // Calculate ETA for status bar
   const cruiseInfo = useMemo(() => {
@@ -183,6 +207,11 @@ function App() {
                 onJoystickRelease={releaseJoystick}
                 onSpeedChange={setSpeed}
                 onDirectInput={handleDirectInput}
+                favorites={favorites}
+                favoritesLoading={favoritesLoading}
+                onFavoriteSelect={handleFavoriteSelect}
+                onSaveFavorite={handleSaveFavorite}
+                onManageFavorites={() => setShowFavoritesManager(true)}
               />
             </div>
           </div>
@@ -207,6 +236,17 @@ function App() {
           </div>
         </>
       )}
+
+      {/* Favorites Manager Modal */}
+      <FavoritesManager
+        isOpen={showFavoritesManager}
+        onClose={() => setShowFavoritesManager(false)}
+        favorites={favorites}
+        isLoading={favoritesLoading}
+        onUpdate={updateFavorite}
+        onDelete={deleteFavorite}
+        onImport={importFavorites}
+      />
     </div>
   );
 }

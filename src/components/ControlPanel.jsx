@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo } from 'react';
 import { Joystick } from './Joystick';
+import { FavoritesDropdown } from './FavoritesDropdown';
 import { distanceBetween } from '../utils/coordinateCalculator';
 
 const MODES = {
@@ -23,6 +24,12 @@ export function ControlPanel({
   isMoving,
   cruiseTarget,
   onModeChange,
+  // Favorites
+  favorites,
+  favoritesLoading,
+  onFavoriteSelect,
+  onSaveFavorite,
+  onManageFavorites,
 }) {
   const [mode, setMode] = useState(MODES.DIRECT);
   const [speed, setSpeed] = useState(5);
@@ -152,6 +159,16 @@ export function ControlPanel({
           </button>
         ))}
       </div>
+
+      {/* Favorites dropdown */}
+      <FavoritesDropdown
+        favorites={favorites || []}
+        isLoading={favoritesLoading}
+        onSelect={onFavoriteSelect}
+        onSaveCurrent={onSaveFavorite}
+        onManage={onManageFavorites}
+        canSaveCurrent={!!location}
+      />
 
       {/* Location info */}
       <div className="location-info">
