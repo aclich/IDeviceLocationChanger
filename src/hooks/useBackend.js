@@ -85,7 +85,7 @@ export function useBackend() {
   const [tunnelStatus, setTunnelStatus] = useState({ running: false });
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [isConnected, setIsConnected] = useState(!isBrowserMode()); // Electron is always connected
+  const [isConnected, setIsConnected] = useState(true); // Updated in useEffect after backend init
 
   const cleanupRef = useRef(null);
   const healthCheckRef = useRef(null);
@@ -114,21 +114,19 @@ export function useBackend() {
     return true;
   }, []);
 
-  // Listen for backend events and check connection
+  // Listen for backend events and set up initial connection
   useEffect(() => {
     if (!window.backend) {
       logger.error('Backend not available - window.backend is undefined');
       setError('Backend not available');
+      setIsConnected(false);
       return;
     }
 
-    // Browser mode: check health periodically
+    // Browser mode: check health once on mount
     if (isBrowserMode()) {
       logger.info('Browser mode detected - checking backend health');
       checkConnection();
-
-      // Check every 5 seconds
-      healthCheckRef.current = setInterval(checkConnection, 5000);
     }
 
     logger.info('Setting up backend event listener');
@@ -151,11 +149,32 @@ export function useBackend() {
         logger.info('Cleaning up backend event listener');
         cleanupRef.current();
       }
-      if (healthCheckRef.current) {
-        clearInterval(healthCheckRef.current);
-      }
     };
   }, [checkConnection]);
+
+  // Health check interval - only runs when disconnected in browser mode
+  useEffect(() => {
+    if (!isBrowserMode()) return;
+
+    // Clear any existing interval
+    if (healthCheckRef.current) {
+      clearInterval(healthCheckRef.current);
+      healthCheckRef.current = null;
+    }
+
+    if (!isConnected) {
+      // When disconnected, check every 5 seconds
+      logger.info('Starting health check interval (disconnected)');
+      healthCheckRef.current = setInterval(checkConnection, 5000);
+    }
+
+    return () => {
+      if (healthCheckRef.current) {
+        clearInterval(healthCheckRef.current);
+        healthCheckRef.current = null;
+      }
+    };
+  }, [isConnected, checkConnection]);
 
   // =========================================================================
   // Device Operations

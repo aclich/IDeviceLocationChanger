@@ -5,7 +5,7 @@
  * but uses HTTP fetch() to communicate with the Python backend.
  */
 
-const BACKEND_URL = 'http://127.0.0.1:8765';
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8765';
 
 let requestId = 0;
 const eventListeners = new Set();

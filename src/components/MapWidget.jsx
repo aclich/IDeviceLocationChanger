@@ -85,6 +85,8 @@ export function MapWidget({ location, onLocationSelect, pendingLocation, cruiseT
   useEffect(() => {
     if (!mapRef.current || mapInstance.current) return;
 
+    let isMounted = true;
+
     // Default to Taipei 101
     mapInstance.current = L.map(mapRef.current).setView([25.033, 121.565], 15);
 
@@ -104,6 +106,7 @@ export function MapWidget({ location, onLocationSelect, pendingLocation, cruiseT
       console.log('[Geolocation] Requesting initial position...');
       navigator.geolocation.getCurrentPosition(
         (position) => {
+          if (!isMounted) return;
           const { latitude, longitude } = position.coords;
           console.log('[Geolocation] Initial position success');
           if (mapInstance.current) {
@@ -121,12 +124,13 @@ export function MapWidget({ location, onLocationSelect, pendingLocation, cruiseT
     }
 
     return () => {
+      isMounted = false;
       if (mapInstance.current) {
         mapInstance.current.remove();
         mapInstance.current = null;
       }
     };
-  }, []);
+  }, [onLocationSelect]);
 
   // Update marker when actual location changes
   useEffect(() => {
