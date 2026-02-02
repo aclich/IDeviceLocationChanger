@@ -11,7 +11,12 @@
     "backend": "python-backend/.venv/bin/python python-backend/main.py --http",
     "build": "vite build",
     "build:electron": "vite build && electron-builder",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:backend": "cd python-backend && .venv/bin/pytest",
+    "test:all": "npm run test:run && npm run test:backend"
   },
   "dependencies": {
     "leaflet": "^1.9.4",
@@ -19,13 +24,17 @@
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@vitejs/plugin-react": "^4.2.1",
     "concurrently": "^8.2.2",
     "electron": "^28.1.0",
     "electron-builder": "^24.9.1",
+    "jsdom": "^27.0.1",
     "vite": "^5.0.10",
+    "vitest": "^3.2.4",
     "wait-on": "^7.2.0"
   },
   "build": {
@@ -41,13 +50,22 @@
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
-      "target": ["dmg", "zip"]
+      "target": [
+        "dmg",
+        "zip"
+      ]
     },
     "win": {
-      "target": ["nsis", "portable"]
+      "target": [
+        "nsis",
+        "portable"
+      ]
     },
     "linux": {
-      "target": ["AppImage", "deb"]
+      "target": [
+        "AppImage",
+        "deb"
+      ]
     },
     "extraResources": [
       {
