@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { isBrowserMode } from '../utils/browserBackend';
 
 // Simple logger utility
 const logger = {
@@ -84,14 +85,50 @@ export function useBackend() {
   const [tunnelStatus, setTunnelStatus] = useState({ running: false });
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isConnected, setIsConnected] = useState(!isBrowserMode()); // Electron is always connected
 
   const cleanupRef = useRef(null);
+  const healthCheckRef = useRef(null);
 
-  // Listen for backend events (if any)
+  // Check backend connection (browser mode only)
+  const checkConnection = useCallback(async () => {
+    if (!window.backend) {
+      setIsConnected(false);
+      return false;
+    }
+
+    // If backend has checkHealth method (browser mode), use it
+    if (window.backend.checkHealth) {
+      const healthy = await window.backend.checkHealth();
+      setIsConnected(healthy);
+      if (!healthy) {
+        setError('Backend not running. Start with: python python-backend/main.py --http');
+      } else {
+        setError(null);
+      }
+      return healthy;
+    }
+
+    // Electron mode - assume connected
+    setIsConnected(true);
+    return true;
+  }, []);
+
+  // Listen for backend events and check connection
   useEffect(() => {
     if (!window.backend) {
       logger.error('Backend not available - window.backend is undefined');
+      setError('Backend not available');
       return;
+    }
+
+    // Browser mode: check health periodically
+    if (isBrowserMode()) {
+      logger.info('Browser mode detected - checking backend health');
+      checkConnection();
+
+      // Check every 5 seconds
+      healthCheckRef.current = setInterval(checkConnection, 5000);
     }
 
     logger.info('Setting up backend event listener');
@@ -114,8 +151,11 @@ export function useBackend() {
         logger.info('Cleaning up backend event listener');
         cleanupRef.current();
       }
+      if (healthCheckRef.current) {
+        clearInterval(healthCheckRef.current);
+      }
     };
-  }, []);
+  }, [checkConnection]);
 
   // =========================================================================
   // Device Operations
@@ -243,6 +283,8 @@ export function useBackend() {
     tunnelStatus,
     error,
     isLoading,
+    isConnected,
+    isBrowserMode: isBrowserMode(),
 
     // Device actions
     listDevices,
@@ -259,5 +301,6 @@ export function useBackend() {
 
     // Utilities
     clearError: () => setError(null),
+    checkConnection,
   };
 }

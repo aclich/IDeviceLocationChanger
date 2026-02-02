@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, session } = require('electron');
 const path = require('path');
 const PythonBridge = require('./python-bridge');
 
@@ -36,6 +36,16 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  // Grant geolocation permission automatically
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    console.log('[Permission] Requested:', permission);
+    if (permission === 'geolocation') {
+      callback(true);
+      return;
+    }
+    callback(false);
+  });
+
   // Start Python backend
   pythonBridge = new PythonBridge();
 

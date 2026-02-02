@@ -24,6 +24,63 @@ export function MapWidget({ location, onLocationSelect, pendingLocation, cruiseT
     mapInstance.current.setView([location.latitude, location.longitude], mapInstance.current.getZoom());
   }, [location]);
 
+  const handleGetDeviceLocation = useCallback(() => {
+    console.log('[Geolocation] Requesting device location...');
+
+    if (!navigator.geolocation) {
+      alert('Geolocation is not supported by this browser.');
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        console.log('[Geolocation] Success:', {
+          latitude,
+          longitude,
+          accuracy: position.coords.accuracy,
+        });
+        if (mapInstance.current) {
+          mapInstance.current.setView([latitude, longitude], 15);
+        }
+        // Set as pending location if current location is empty
+        if (!location) {
+          console.log('[Geolocation] Setting as pending location');
+          onLocationSelect?.(latitude, longitude);
+        }
+      },
+      (error) => {
+        console.log('[Geolocation] Error:', { code: error.code, message: error.message });
+
+        let message = '';
+        switch (error.code) {
+          case 1: // PERMISSION_DENIED
+            message = 'Location permission denied.\n\n' +
+              'To enable location access:\n' +
+              '• macOS: System Settings → Privacy & Security → Location Services → Enable for this app\n' +
+              '• Windows: Settings → Privacy → Location → Allow apps to access your location\n\n' +
+              'Note: In development mode, geolocation may not work due to missing app entitlements. ' +
+              'It will work in the packaged production app.';
+            break;
+          case 2: // POSITION_UNAVAILABLE
+            message = 'Location unavailable.\n\n' +
+              'Please ensure:\n' +
+              '• Location Services is enabled on your device\n' +
+              '• You have an active internet connection\n' +
+              '• Your device has location hardware (WiFi/GPS)';
+            break;
+          case 3: // TIMEOUT
+            message = 'Location request timed out. Please try again.';
+            break;
+          default:
+            message = `Failed to get location: ${error.message}`;
+        }
+        alert(message);
+      },
+      { timeout: 10000, enableHighAccuracy: false }
+    );
+  }, [location, onLocationSelect]);
+
   // Initialize map
   useEffect(() => {
     if (!mapRef.current || mapInstance.current) return;
@@ -41,6 +98,27 @@ export function MapWidget({ location, onLocationSelect, pendingLocation, cruiseT
       const { lat, lng } = e.latlng;
       onLocationSelect?.(lat, lng);
     });
+
+    // Try to get user's current location (silent failure on startup)
+    if (navigator.geolocation) {
+      console.log('[Geolocation] Requesting initial position...');
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const { latitude, longitude } = position.coords;
+          console.log('[Geolocation] Initial position success');
+          if (mapInstance.current) {
+            mapInstance.current.setView([latitude, longitude], 15);
+          }
+          // Set as pending location for easy first-time setup
+          onLocationSelect?.(latitude, longitude);
+        },
+        (error) => {
+          console.log('[Geolocation] Initial position failed:', error.code, error.message);
+          // Silent failure - user can click the GPS button for detailed error
+        },
+        { timeout: 10000, enableHighAccuracy: false }
+      );
+    }
 
     return () => {
       if (mapInstance.current) {
@@ -175,6 +253,13 @@ export function MapWidget({ location, onLocationSelect, pendingLocation, cruiseT
           ⌖
         </button>
       )}
+      <button
+        className="map-gps-btn"
+        onClick={handleGetDeviceLocation}
+        title="Go to device GPS location"
+      >
+        📍
+      </button>
     </div>
   );
 }

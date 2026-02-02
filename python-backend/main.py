@@ -2,7 +2,11 @@
 """
 Location Simulator Backend
 
-A simple JSON-RPC server over stdin/stdout for iOS location simulation.
+A JSON-RPC server for iOS location simulation.
+Supports two modes:
+  - stdio mode (default): JSON-RPC over stdin/stdout for Electron
+  - HTTP mode (--http): HTTP server for browser access
+
 All coordinate calculations are handled by the frontend.
 """
 
@@ -10,6 +14,7 @@ import sys
 import json
 import asyncio
 import logging
+import argparse
 from datetime import datetime
 from typing import Optional
 
@@ -117,8 +122,13 @@ class LocationSimulatorServer:
         if latitude is None or longitude is None:
             return {"success": False, "error": "latitude and longitude required"}
 
+        # Get fresh device state from DeviceManager (includes tunnel info)
+        device = self.devices.get_device(self._selected_device.id)
+        if not device:
+            device = self._selected_device
+
         result = await self.location.set_location(
-            self._selected_device,
+            device,
             float(latitude),
             float(longitude)
         )
@@ -129,7 +139,12 @@ class LocationSimulatorServer:
         if not self._selected_device:
             return {"success": False, "error": "No device selected"}
 
-        result = await self.location.clear_location(self._selected_device)
+        # Get fresh device state from DeviceManager (includes tunnel info)
+        device = self.devices.get_device(self._selected_device.id)
+        if not device:
+            device = self._selected_device
+
+        result = await self.location.clear_location(device)
         return result
 
     async def _start_tunnel(self, params: dict) -> dict:
@@ -146,9 +161,15 @@ class LocationSimulatorServer:
                 udid=result.get("udid")
             )
             # Update specified device or selected device
-            target_id = udid or (self._selected_device.id if self._selected_device else None)
+            target_id = udid or (
+                self._selected_device.id if self._selected_device else None)
             if target_id:
                 self.devices.update_tunnel(target_id, tunnel)
+                # Also update selected device if it's the same one
+                if self._selected_device and self._selected_device.id == target_id:
+                    self._selected_device.rsd_tunnel = tunnel
+                    logger.info(
+                        f"Updated selected device with tunnel: {tunnel.address}:{tunnel.port}")
 
         return result
 
@@ -161,13 +182,13 @@ class LocationSimulatorServer:
         return self.tunnel.get_status()
 
     # =========================================================================
-    # Main Loop
+    # Main Loop (stdio mode)
     # =========================================================================
 
-    async def run(self):
-        """Main loop - read from stdin, process, write to stdout."""
+    async def run_stdio(self):
+        """Main loop for stdio mode - read from stdin, process, write to stdout."""
         logger.info("=" * 60)
-        logger.info("Backend started - waiting for requests")
+        logger.info("Backend started (stdio mode) - waiting for requests")
         logger.info("=" * 60)
 
         loop = asyncio.get_event_loop()
@@ -193,7 +214,8 @@ class LocationSimulatorServer:
                 method = request.get("method", "?")
 
                 # Log request
-                logger.info(f"[{self._request_count}] << {method} (id={request_id})")
+                logger.info(
+                    f"[{self._request_count}] << {method} (id={request_id})")
                 logger.debug(f"    Params: {request.get('params', {})}")
 
                 # Process
@@ -203,9 +225,11 @@ class LocationSimulatorServer:
 
                 # Log response
                 if "error" in response:
-                    logger.error(f"[{self._request_count}] >> ERROR ({elapsed:.1f}ms): {response['error']}")
+                    logger.error(
+                        f"[{self._request_count}] >> ERROR ({elapsed:.1f}ms): {response['error']}")
                 else:
-                    logger.info(f"[{self._request_count}] >> OK ({elapsed:.1f}ms)")
+                    logger.info(
+                        f"[{self._request_count}] >> OK ({elapsed:.1f}ms)")
 
                 # Send response
                 print(json.dumps(response), flush=True)
@@ -217,12 +241,137 @@ class LocationSimulatorServer:
 
         logger.info("Backend shutdown")
 
+    # =========================================================================
+    # HTTP Server Mode
+    # =========================================================================
+
+    async def run_http(self, host: str = "127.0.0.1", port: int = 8765):
+        """Run as HTTP server for browser mode."""
+        try:
+            from aiohttp import web
+        except ImportError:
+            logger.error("aiohttp not installed. Run: pip install aiohttp")
+            sys.exit(1)
+
+        # CORS headers for all responses
+        CORS_HEADERS = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Accept",
+            "Access-Control-Max-Age": "3600",
+        }
+
+        @web.middleware
+        async def cors_middleware(request: web.Request, handler):
+            """Add CORS headers to all responses."""
+            # Handle preflight requests
+            if request.method == "OPTIONS":
+                return web.Response(headers=CORS_HEADERS)
+
+            # Handle actual requests
+            try:
+                response = await handler(request)
+                response.headers.update(CORS_HEADERS)
+                return response
+            except web.HTTPException as e:
+                e.headers.update(CORS_HEADERS)
+                raise
+
+        async def handle_rpc(request: web.Request) -> web.Response:
+            """Handle JSON-RPC requests over HTTP POST."""
+            try:
+                body = await request.json()
+                self._request_count += 1
+                request_id = body.get("id", "?")
+                method = body.get("method", "?")
+
+                logger.info(
+                    f"[{self._request_count}] << {method} (id={request_id})")
+                logger.debug(f"    Params: {body.get('params', {})}")
+
+                start = datetime.now()
+                response = await self.handle_request(body)
+                elapsed = (datetime.now() - start).total_seconds() * 1000
+
+                if "error" in response:
+                    logger.error(
+                        f"[{self._request_count}] >> ERROR ({elapsed:.1f}ms): {response['error']}")
+                else:
+                    logger.info(
+                        f"[{self._request_count}] >> OK ({elapsed:.1f}ms)")
+
+                return web.json_response(response)
+            except json.JSONDecodeError:
+                return web.json_response(
+                    {"error": {"code": -32700, "message": "Parse error"}},
+                    status=400
+                )
+            except Exception as e:
+                logger.exception(f"HTTP handler error: {e}")
+                return web.json_response(
+                    {"error": {"code": -1, "message": str(e)}},
+                    status=500
+                )
+
+        async def handle_health(request: web.Request) -> web.Response:
+            """Health check endpoint."""
+            return web.json_response({"status": "ok", "mode": "http"})
+
+        # Create app with CORS middleware
+        app = web.Application(middlewares=[cors_middleware])
+        app.router.add_route("*", "/rpc", handle_rpc)
+        app.router.add_route("*", "/health", handle_health)
+
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, host, port)
+
+        logger.info("=" * 60)
+        logger.info(f"Backend started (HTTP mode)")
+        logger.info(f"Server running at http://{host}:{port}")
+        logger.info(f"RPC endpoint: http://{host}:{port}/rpc")
+        logger.info("=" * 60)
+
+        await site.start()
+
+        # Keep running until interrupted
+        try:
+            while True:
+                await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await runner.cleanup()
+            logger.info("HTTP server shutdown")
+
 
 def main():
     """Entry point."""
+    parser = argparse.ArgumentParser(description="Location Simulator Backend")
+    parser.add_argument(
+        "--http",
+        action="store_true",
+        help="Run as HTTP server (for browser mode)"
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="HTTP server host (default: 127.0.0.1)"
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        help="HTTP server port (default: 8765)"
+    )
+    args = parser.parse_args()
+
     server = LocationSimulatorServer()
     try:
-        asyncio.run(server.run())
+        if args.http:
+            asyncio.run(server.run_http(args.host, args.port))
+        else:
+            asyncio.run(server.run_stdio())
     except KeyboardInterrupt:
         logger.info("Interrupted")
     except Exception as e:

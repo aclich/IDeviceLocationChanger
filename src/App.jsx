@@ -18,6 +18,8 @@ function App() {
     tunnelStatus,
     error,
     isLoading,
+    isConnected,
+    isBrowserMode,
     listDevices,
     selectDevice,
     setLocation,
@@ -122,6 +124,12 @@ function App() {
             Debug
           </button>
         </div>
+        {isBrowserMode && (
+          <div className={`connection-status ${isConnected ? 'connected' : 'disconnected'}`}>
+            <span className="status-dot"></span>
+            <span>{isConnected ? 'Connected' : 'Disconnected'}</span>
+          </div>
+        )}
       </div>
 
       {/* Error banner */}
