@@ -108,7 +108,7 @@ class TestLocationServicePhysicalDevice:
             state=DeviceState.CONNECTED,
         )
 
-        with patch.object(service, '_set_via_tunnel', new_callable=AsyncMock) as mock_tunnel:
+        with patch.object(service, '_set_via_tunnel_with_retry', new_callable=AsyncMock) as mock_tunnel:
             mock_tunnel.return_value = {"success": True}
 
             await service._set_physical_location(device, 37.0, -122.0, tunnel=tunnel)
@@ -126,7 +126,7 @@ class TestLocationServicePhysicalDevice:
             state=DeviceState.CONNECTED,
         )
 
-        with patch.object(service, '_set_via_usbmux') as mock_usbmux:
+        with patch.object(service, '_set_via_usbmux_with_retry', new_callable=AsyncMock) as mock_usbmux:
             mock_usbmux.return_value = {"success": True}
 
             await service._set_physical_location(device, 37.0, -122.0, tunnel=None)
@@ -163,7 +163,7 @@ class TestLocationServicePhysicalDevice:
             state=DeviceState.CONNECTED,
         )
 
-        with patch.object(service, '_clear_via_usbmux') as mock_usbmux:
+        with patch.object(service, '_clear_via_usbmux', new_callable=AsyncMock) as mock_usbmux:
             mock_usbmux.return_value = {"success": True}
 
             await service._clear_physical_location(device, tunnel=None)
@@ -193,7 +193,7 @@ class TestLocationServiceTunnel:
             'pymobiledevice3.services.dvt.instruments.location_simulation': MagicMock(),
         }):
             # The actual call will fail due to mocking, but we verify the signature
-            result = await service._set_via_tunnel(device, tunnel, 37.0, -122.0)
+            result = await service._set_via_tunnel_with_retry(device, tunnel, 37.0, -122.0)
 
             # Should fail but with connection error, not argument error
             assert result["success"] is False
@@ -225,7 +225,8 @@ class TestLocationServiceTunnel:
 class TestLocationServiceUsbmux:
     """Tests for usbmux-based connections (iOS 16 and earlier)."""
 
-    def test_set_via_usbmux_handles_error(self):
+    @pytest.mark.asyncio
+    async def test_set_via_usbmux_handles_error(self):
         service = LocationService()
         device = Device(
             id="test-device",
@@ -235,14 +236,15 @@ class TestLocationServiceUsbmux:
         )
 
         # Mock the actual method to simulate error
-        with patch.object(service, '_set_via_usbmux') as mock_set:
+        with patch.object(service, '_set_via_usbmux_with_retry', new_callable=AsyncMock) as mock_set:
             mock_set.return_value = {"success": False, "error": "Device not found"}
 
-            result = mock_set(device, 37.7749, -122.4194)
+            result = await mock_set(device, 37.7749, -122.4194)
 
             assert result["success"] is False
 
-    def test_clear_via_usbmux_handles_error(self):
+    @pytest.mark.asyncio
+    async def test_clear_via_usbmux_handles_error(self):
         service = LocationService()
         device = Device(
             id="test-device",
@@ -251,9 +253,9 @@ class TestLocationServiceUsbmux:
             state=DeviceState.CONNECTED,
         )
 
-        with patch.object(service, '_clear_via_usbmux') as mock_clear:
+        with patch.object(service, '_clear_via_usbmux', new_callable=AsyncMock) as mock_clear:
             mock_clear.return_value = {"success": False, "error": "Device not found"}
 
-            result = mock_clear(device)
+            result = await mock_clear(device)
 
             assert result["success"] is False

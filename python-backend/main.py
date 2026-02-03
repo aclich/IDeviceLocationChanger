@@ -47,6 +47,10 @@ class LocationSimulatorServer:
         self.location = LocationService()
         self.favorites = FavoritesService()
 
+        # Wire up tunnel provider for retry mechanism
+        # This allows LocationService to get fresh tunnel info on connection errors
+        self.location.set_tunnel_provider(self._get_tunnel_for_device)
+
         # State
         self._selected_device: Optional[Device] = None
         self._request_count = 0
@@ -69,6 +73,13 @@ class LocationSimulatorServer:
         }
 
         logger.info("Location Simulator Backend initialized")
+
+    async def _get_tunnel_for_device(self, udid: str):
+        """Tunnel provider callback for LocationService retry mechanism.
+
+        Queries tunneld for fresh tunnel info.
+        """
+        return await self.tunnel.get_tunnel(udid)
 
     # =========================================================================
     # JSON-RPC Handler
@@ -284,50 +295,53 @@ class LocationSimulatorServer:
         protocol = asyncio.StreamReaderProtocol(reader)
         await loop.connect_read_pipe(lambda: protocol, sys.stdin)
 
-        while True:
-            try:
-                line = await reader.readline()
-                if not line:
-                    logger.info("EOF received - frontend closed")
-                    break
+        try:
+            while True:
+                try:
+                    line = await reader.readline()
+                    if not line:
+                        logger.info("EOF received - frontend closed")
+                        break
 
-                line_str = line.decode().strip()
-                if not line_str:
-                    continue
+                    line_str = line.decode().strip()
+                    if not line_str:
+                        continue
 
-                # Parse request
-                request = json.loads(line_str)
-                self._request_count += 1
-                request_id = request.get("id", "?")
-                method = request.get("method", "?")
+                    # Parse request
+                    request = json.loads(line_str)
+                    self._request_count += 1
+                    request_id = request.get("id", "?")
+                    method = request.get("method", "?")
 
-                # Log request
-                logger.info(
-                    f"[{self._request_count}] << {method} (id={request_id})")
-                logger.debug(f"    Params: {request.get('params', {})}")
-
-                # Process
-                start = datetime.now()
-                response = await self.handle_request(request)
-                elapsed = (datetime.now() - start).total_seconds() * 1000
-
-                # Log response
-                if "error" in response:
-                    logger.error(
-                        f"[{self._request_count}] >> ERROR ({elapsed:.1f}ms): {response['error']}")
-                else:
+                    # Log request
                     logger.info(
-                        f"[{self._request_count}] >> OK ({elapsed:.1f}ms)")
+                        f"[{self._request_count}] << {method} (id={request_id})")
+                    logger.debug(f"    Params: {request.get('params', {})}")
 
-                # Send response
-                print(json.dumps(response), flush=True)
+                    # Process
+                    start = datetime.now()
+                    response = await self.handle_request(request)
+                    elapsed = (datetime.now() - start).total_seconds() * 1000
 
-            except json.JSONDecodeError as e:
-                logger.error(f"Invalid JSON: {e}")
-            except Exception as e:
-                logger.exception(f"Error: {e}")
+                    # Log response
+                    if "error" in response:
+                        logger.error(
+                            f"[{self._request_count}] >> ERROR ({elapsed:.1f}ms): {response['error']}")
+                    else:
+                        logger.info(
+                            f"[{self._request_count}] >> OK ({elapsed:.1f}ms)")
 
-        logger.info("Backend shutdown")
+                    # Send response
+                    print(json.dumps(response), flush=True)
+
+                except json.JSONDecodeError as e:
+                    logger.error(f"Invalid JSON: {e}")
+                except Exception as e:
+                    logger.exception(f"Error: {e}")
+        finally:
+            # Clean up persistent connections on shutdown
+            await self.location.close_all_connections()
+            logger.info("Backend shutdown")
 
     # =========================================================================
     # HTTP Server Mode
@@ -429,6 +443,7 @@ class LocationSimulatorServer:
         except asyncio.CancelledError:
             pass
         finally:
+            await self.location.close_all_connections()
             await runner.cleanup()
             logger.info("HTTP server shutdown")
 
