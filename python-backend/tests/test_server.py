@@ -126,8 +126,10 @@ class TestSetLocation:
             type=DeviceType.PHYSICAL,
             state=DeviceState.CONNECTED,
         )
+        mock_tunnel = MagicMock()
         server._selected_device = mock_device
         server.devices.get_device = MagicMock(return_value=mock_device)
+        server.tunnel.get_tunnel = AsyncMock(return_value=mock_tunnel)
         server.location.set_location = AsyncMock(return_value={"success": True})
 
         request = {
@@ -138,7 +140,9 @@ class TestSetLocation:
         response = await server.handle_request(request)
 
         assert response["result"]["success"] is True
-        server.location.set_location.assert_called_once_with(mock_device, 25.033, 121.565)
+        server.location.set_location.assert_called_once_with(
+            mock_device, 25.033, 121.565, tunnel=mock_tunnel
+        )
 
     async def test_set_location_no_device_selected(self, server):
         server._selected_device = None
@@ -173,15 +177,17 @@ class TestClearLocation:
             type=DeviceType.PHYSICAL,
             state=DeviceState.CONNECTED,
         )
+        mock_tunnel = MagicMock()
         server._selected_device = mock_device
         server.devices.get_device = MagicMock(return_value=mock_device)
+        server.tunnel.get_tunnel = AsyncMock(return_value=mock_tunnel)
         server.location.clear_location = AsyncMock(return_value={"success": True})
 
         request = {"id": "1", "method": "clearLocation", "params": {}}
         response = await server.handle_request(request)
 
         assert response["result"]["success"] is True
-        server.location.clear_location.assert_called_once_with(mock_device)
+        server.location.clear_location.assert_called_once_with(mock_device, tunnel=mock_tunnel)
 
     async def test_clear_location_no_device_selected(self, server):
         server._selected_device = None
@@ -221,13 +227,22 @@ class TestTunnelOperations:
         assert response["result"]["address"] == "127.0.0.1"
         server.devices.update_tunnel.assert_called_once()
 
-    async def test_start_tunnel_failure(self, server):
+    async def test_start_tunnel_failure_no_device(self, server):
+        """startTunnel without device or UDID returns error."""
+        request = {"id": "1", "method": "startTunnel", "params": {}}
+        response = await server.handle_request(request)
+
+        assert response["result"]["success"] is False
+        assert "no device" in response["result"]["error"].lower()
+
+    async def test_start_tunnel_failure_with_udid(self, server):
+        """startTunnel with UDID but tunnel fails."""
         server.tunnel.start_tunnel = AsyncMock(return_value={
             "success": False,
             "error": "No device connected",
         })
 
-        request = {"id": "1", "method": "startTunnel", "params": {}}
+        request = {"id": "1", "method": "startTunnel", "params": {"udid": "test-device"}}
         response = await server.handle_request(request)
 
         assert response["result"]["success"] is False

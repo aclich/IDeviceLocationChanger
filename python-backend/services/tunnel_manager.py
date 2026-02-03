@@ -1,6 +1,9 @@
-"""RSD tunnel management for iOS 17+ devices."""
+"""RSD tunnel management for iOS 17+ devices.
 
-import asyncio
+TunnelManager queries tunneld for tunnel connections.
+It does NOT cache tunnel info - each get_tunnel() call queries tunneld fresh.
+"""
+
 import json
 import logging
 import os
@@ -11,7 +14,7 @@ import time
 import urllib.request
 from typing import Optional
 
-from models import RSDTunnel
+from models import RSDTunnel, TunnelState, TunnelStatus
 
 logger = logging.getLogger(__name__)
 
@@ -20,119 +23,204 @@ TUNNELD_DEFAULT_PORT = 49151
 
 
 class TunnelManager:
-    """Manages pymobiledevice3 lockdown tunnel for iOS 17+ devices."""
+    """
+    Manages pymobiledevice3 lockdown tunnels for iOS 17+ devices.
+
+    Each get_tunnel() call queries tunneld for fresh tunnel info.
+    No caching - tunneld is the source of truth.
+    """
 
     def __init__(self):
-        self._tunnel_info: Optional[RSDTunnel] = None
-        self._is_running = False
-        self._status_message = "Not started"
+        # Track last known state for UI display
+        self._last_status: dict[str, TunnelState] = {}
+        # Track last error for UI display
         self._last_error: Optional[str] = None
 
-    @property
-    def is_running(self) -> bool:
-        return self._is_running
+    # =========================================================================
+    # Public API
+    # =========================================================================
 
-    @property
-    def tunnel_info(self) -> Optional[RSDTunnel]:
-        return self._tunnel_info
+    async def get_tunnel(self, udid: str) -> Optional[RSDTunnel]:
+        """
+        Get tunnel for device by querying tunneld.
 
-    def get_status(self) -> dict:
-        """Get current tunnel status."""
+        Always queries tunneld for fresh info - no caching.
+        Returns tunnel info if found, None otherwise.
+
+        This method does NOT require admin password - it only queries
+        existing tunnels from tunneld daemon.
+        """
+        if not udid:
+            logger.warning("get_tunnel called without UDID")
+            return None
+
+        # Query tunneld for current tunnel info
+        tunnel = self._query_tunneld_http(udid)
+
+        if tunnel:
+            logger.debug(f"[{udid[:8]}] Tunnel found: {tunnel.address}:{tunnel.port}")
+            # Update last known status
+            self._update_status(udid, TunnelStatus.CONNECTED, tunnel)
+        else:
+            logger.debug(f"[{udid[:8]}] No tunnel found in tunneld")
+            self._update_status(udid, TunnelStatus.NO_TUNNEL, None)
+
+        return tunnel
+
+    def get_status(self, udid: str = None) -> dict:
+        """
+        Get tunnel status for UI display.
+
+        If udid provided: return status for specific device
+        If udid is None: return status for all devices with legacy format
+        """
+        if udid:
+            state = self._last_status.get(udid)
+            if state:
+                return state.to_dict()
+            return TunnelState(udid=udid).to_dict()
+
+        # Legacy format for backward compatibility
+        # Return status of first connected tunnel or general status
+        for state in self._last_status.values():
+            if state.status == TunnelStatus.CONNECTED and state.tunnel_info:
+                return {
+                    "running": True,
+                    "address": state.tunnel_info.address,
+                    "port": state.tunnel_info.port,
+                    "udid": state.udid,
+                    "message": f"Connected: {state.tunnel_info.address}:{state.tunnel_info.port}",
+                    "status": state.status.value,
+                }
+
+        # No connected tunnels
         return {
-            "running": self._is_running,
-            "address": self._tunnel_info.address if self._tunnel_info else None,
-            "port": self._tunnel_info.port if self._tunnel_info else None,
-            "udid": self._tunnel_info.udid if self._tunnel_info else None,
-            "message": self._status_message
+            "running": False,
+            "address": None,
+            "port": None,
+            "udid": None,
+            "message": self._last_error or "No active tunnels",
+            "status": TunnelStatus.NO_TUNNEL.value,
         }
 
-    async def start_tunnel(self, udid: Optional[str] = None) -> dict:
-        """Start the lockdown tunnel."""
+    def invalidate(self, udid: str) -> None:
+        """
+        Mark tunnel as disconnected after a connection failure.
+        Called by main.py when location operation fails.
+
+        Since we don't cache, this just updates the UI status.
+        Next get_tunnel() will query tunneld fresh anyway.
+        """
+        if udid in self._last_status:
+            state = self._last_status[udid]
+            state.status = TunnelStatus.DISCONNECTED
+            state.error = "Connection failed"
+            logger.info(f"[{udid[:8]}] Tunnel marked as disconnected")
+
+    async def start_tunnel(self, udid: str) -> dict:
+        """
+        Explicitly start tunnel for device. May require admin password.
+
+        Called by UI "Start Tunnel" button when no tunnel exists.
+        """
+        if not udid:
+            return {"success": False, "error": "UDID required"}
+
         logger.info("=" * 50)
-        logger.info(f"Starting tunnel...{f' (UDID: {udid})' if udid else ''}")
+        logger.info(f"Starting tunnel for {udid[:8]}...")
         logger.info("=" * 50)
 
-        # Return existing tunnel if running
-        if self._is_running and self._tunnel_info:
-            logger.info(f"Tunnel already running: {self._tunnel_info.address}:{self._tunnel_info.port}")
-            return {
-                "success": True,
-                "address": self._tunnel_info.address,
-                "port": self._tunnel_info.port,
-                "udid": self._tunnel_info.udid
-            }
-
-        self._status_message = "Starting tunnel..."
         self._last_error = None
 
         # Step 1: Check for existing tunnel
         logger.info("Checking for existing tunnel...")
-        tunnel = self._find_existing_tunnel(udid)
+        tunnel = self._query_tunneld_http(udid)
+
         if tunnel:
-            logger.info(f"Found existing tunnel: {tunnel.address}:{tunnel.port}")
+            logger.info(f"[{udid[:8]}] Found existing tunnel: {tunnel.address}:{tunnel.port}")
+            self._update_status(udid, TunnelStatus.CONNECTED, tunnel)
             return {
                 "success": True,
                 "address": tunnel.address,
                 "port": tunnel.port,
-                "udid": tunnel.udid
+                "udid": udid,
+                "status": TunnelStatus.CONNECTED.value,
             }
 
-        # Step 2: Start new tunnel
-        logger.info("No existing tunnel found, starting new tunnel...")
-        if sys.platform == "darwin":
-            tunnel = self._start_tunnel_macos(udid)
-        elif sys.platform == "linux":
-            tunnel = self._start_tunnel_linux(udid)
-        else:
-            self._last_error = f"Unsupported platform: {sys.platform}"
-            return {"success": False, "error": self._last_error}
+        # Step 2: Start new tunnel (requires admin)
+        logger.info("No tunnel found, starting new tunnel...")
+        tunnel = await self._start_new_tunnel(udid)
 
         if tunnel:
-            logger.info(f"SUCCESS: Tunnel started: {tunnel.address}:{tunnel.port}")
+            self._update_status(udid, TunnelStatus.CONNECTED, tunnel)
+            logger.info(f"[{udid[:8]}] SUCCESS: Tunnel started: {tunnel.address}:{tunnel.port}")
             return {
                 "success": True,
                 "address": tunnel.address,
                 "port": tunnel.port,
-                "udid": tunnel.udid
+                "udid": udid,
+                "status": TunnelStatus.CONNECTED.value,
             }
         else:
-            logger.error(f"FAILED: {self._last_error}")
+            self._update_status(udid, TunnelStatus.ERROR, None, self._last_error)
+            logger.error(f"[{udid[:8]}] FAILED: {self._last_error}")
             return {"success": False, "error": self._last_error or "Unknown error"}
 
-    async def stop_tunnel(self) -> dict:
-        """Stop the running tunnel."""
-        logger.info("Stopping tunnel...")
+    async def stop_tunnel(self, udid: str = None) -> dict:
+        """
+        Stop tunnel for device or all tunnels.
 
-        if sys.platform == "darwin":
-            self._stop_tunnel_macos()
-        elif sys.platform == "linux":
-            self._stop_tunnel_linux()
+        If udid provided: clear that device's status
+        If udid is None: stop all tunnel processes (requires admin)
+        """
+        logger.info(f"Stopping tunnel...{f' (UDID: {udid[:8]})' if udid else ' (all)'}")
 
-        self._is_running = False
-        self._tunnel_info = None
-        self._status_message = "Stopped"
-        logger.info("Tunnel stopped")
+        if udid:
+            # Just clear the specific device's status
+            if udid in self._last_status:
+                del self._last_status[udid]
+            logger.info(f"[{udid[:8]}] Tunnel state cleared")
+        else:
+            # Stop all tunnel processes
+            if sys.platform == "darwin":
+                self._stop_tunnel_macos()
+            elif sys.platform == "linux":
+                self._stop_tunnel_linux()
+
+            # Clear all states
+            self._last_status.clear()
+            logger.info("All tunnels stopped")
 
         return {"success": True}
 
     # =========================================================================
-    # Tunnel Discovery
+    # Internal Helpers
     # =========================================================================
 
-    def _find_existing_tunnel(self, udid: Optional[str] = None) -> Optional[RSDTunnel]:
-        """Check if a tunnel already exists."""
-        tunnel = self._query_tunneld_http(udid)
-        if tunnel:
-            return tunnel
+    def _update_status(
+        self,
+        udid: str,
+        status: TunnelStatus,
+        tunnel: Optional[RSDTunnel],
+        error: str = None
+    ) -> None:
+        """Update last known status for UI display."""
+        if udid not in self._last_status:
+            self._last_status[udid] = TunnelState(udid=udid)
 
-        tunnel = self._query_tunneld_api(udid)
-        if tunnel:
-            return tunnel
+        state = self._last_status[udid]
+        state.status = status
+        state.tunnel_info = tunnel
+        state.error = error
+        if status == TunnelStatus.CONNECTED:
+            state.last_validated = time.time()
 
-        return None
+    # =========================================================================
+    # Tunnel Discovery (Query tunneld)
+    # =========================================================================
 
-    def _query_tunneld_http(self, udid: Optional[str] = None) -> Optional[RSDTunnel]:
-        """Query tunneld via HTTP API."""
+    def _query_tunneld_http(self, udid: str) -> Optional[RSDTunnel]:
+        """Query tunneld via HTTP API for specific device."""
         try:
             url = f"http://127.0.0.1:{TUNNELD_DEFAULT_PORT}/"
             req = urllib.request.Request(url, method='GET')
@@ -144,25 +232,21 @@ class TunnelManager:
             data = json.loads(response_text)
 
             if not isinstance(data, dict) or len(data) == 0:
-                logger.debug("Tunneld running but no devices")
                 return None
 
             # Find matching device
-            if udid and udid in data:
+            if udid in data:
                 return self._extract_tunnel_info(data[udid], udid)
 
-            # Return first available
+            # Try partial match (some systems use different UDID formats)
             for device_udid, device_info in data.items():
-                if udid and device_udid != udid:
-                    continue
-                tunnel = self._extract_tunnel_info(device_info, device_udid)
-                if tunnel:
-                    return tunnel
+                if udid in device_udid or device_udid in udid:
+                    return self._extract_tunnel_info(device_info, udid)
 
             return None
 
         except Exception as e:
-            logger.debug(f"Tunneld HTTP not available: {e}")
+            logger.debug(f"Tunneld query failed: {e}")
             return None
 
     def _extract_tunnel_info(self, device_info, udid: str) -> Optional[RSDTunnel]:
@@ -187,63 +271,35 @@ class TunnelManager:
                 device_info.get('rsd_port'))
 
         if address and port:
-            tunnel = RSDTunnel(address=str(address), port=int(port), udid=udid)
-            self._tunnel_info = tunnel
-            self._is_running = True
-            self._status_message = f"Running: {tunnel.address}:{tunnel.port}"
-            logger.info(f"Found tunnel: {tunnel.address}:{tunnel.port} (UDID: {udid})")
-            return tunnel
+            return RSDTunnel(address=str(address), port=int(port), udid=udid)
 
         return None
 
-    def _query_tunneld_api(self, udid: Optional[str] = None) -> Optional[RSDTunnel]:
-        """Query tunneld via pymobiledevice3 API."""
+    def _is_tunneld_running(self) -> bool:
+        """Check if tunneld HTTP API is responding."""
         try:
-            from pymobiledevice3.tunneld import async_get_tunneld_devices
-
-            # Run the async function in a new event loop
-            # (we might be called from sync context)
-            try:
-                loop = asyncio.get_running_loop()
-                # Already in async context - skip this method, HTTP API should work
-                logger.debug("Skipping tunneld API (already in async context)")
-                return None
-            except RuntimeError:
-                # No running loop - safe to use asyncio.run()
-                devices = asyncio.run(async_get_tunneld_devices())
-
-            if not devices:
-                return None
-
-            for device in devices:
-                device_udid = getattr(device, 'udid', None)
-                if udid and device_udid != udid:
-                    continue
-
-                tunnel = RSDTunnel(
-                    address=str(device.address),
-                    port=device.port,
-                    udid=device_udid or udid
-                )
-                self._tunnel_info = tunnel
-                self._is_running = True
-                self._status_message = f"Running: {tunnel.address}:{tunnel.port}"
-                return tunnel
-
-            return None
-
-        except ImportError:
-            logger.debug("tunneld API not available")
-            return None
-        except Exception as e:
-            logger.debug(f"tunneld API error: {e}")
-            return None
+            url = f"http://127.0.0.1:{TUNNELD_DEFAULT_PORT}/"
+            req = urllib.request.Request(url, method='GET')
+            with urllib.request.urlopen(req, timeout=1):
+                return True
+        except Exception:
+            return False
 
     # =========================================================================
-    # macOS Tunnel Start/Stop
+    # Start New Tunnel (requires admin)
     # =========================================================================
 
-    def _start_tunnel_macos(self, udid: Optional[str] = None) -> Optional[RSDTunnel]:
+    async def _start_new_tunnel(self, udid: str) -> Optional[RSDTunnel]:
+        """Start new tunnel - platform specific, may require admin."""
+        if sys.platform == "darwin":
+            return self._start_tunnel_macos(udid)
+        elif sys.platform == "linux":
+            return self._start_tunnel_linux(udid)
+        else:
+            self._last_error = f"Unsupported platform: {sys.platform}"
+            return None
+
+    def _start_tunnel_macos(self, udid: str) -> Optional[RSDTunnel]:
         """Start tunnel on macOS."""
         python_path = self._find_python_with_pymobiledevice3()
         logger.info(f"Using Python: {python_path}")
@@ -264,17 +320,7 @@ class TunnelManager:
             logger.info("Tunneld failed, trying direct lockdown tunnel...")
             return self._start_lockdown_tunnel_macos(python_path, udid)
 
-    def _is_tunneld_running(self) -> bool:
-        """Check if tunneld HTTP API is responding."""
-        try:
-            url = f"http://127.0.0.1:{TUNNELD_DEFAULT_PORT}/"
-            req = urllib.request.Request(url, method='GET')
-            with urllib.request.urlopen(req, timeout=1) as response:
-                return True
-        except Exception:
-            return False
-
-    def _start_tunneld_macos(self, python_path: str, udid: Optional[str] = None) -> Optional[RSDTunnel]:
+    def _start_tunneld_macos(self, python_path: str, udid: str) -> Optional[RSDTunnel]:
         """Start tunneld daemon on macOS with admin privileges."""
         script = f'''
         do shell script "{python_path} -m pymobiledevice3 remote tunneld -d > /tmp/tunneld.log 2>&1 &" with administrator privileges
@@ -307,7 +353,7 @@ class TunnelManager:
             self._last_error = str(e)
             return None
 
-    def _start_lockdown_tunnel_macos(self, python_path: str, udid: Optional[str] = None) -> Optional[RSDTunnel]:
+    def _start_lockdown_tunnel_macos(self, python_path: str, udid: str) -> Optional[RSDTunnel]:
         """Start direct lockdown tunnel on macOS."""
         udid_arg = f" --udid {udid}" if udid else ""
         script = f'''
@@ -315,7 +361,7 @@ class TunnelManager:
         '''
 
         try:
-            logger.info(f"Requesting admin privileges for lockdown tunnel...{f' (UDID: {udid})' if udid else ''}")
+            logger.info(f"Requesting admin privileges for lockdown tunnel... (UDID: {udid[:8]})")
             result = subprocess.run(
                 ["osascript", "-e", script],
                 capture_output=True,
@@ -346,6 +392,27 @@ class TunnelManager:
             self._last_error = str(e)
             return None
 
+    def _start_tunnel_linux(self, udid: str) -> Optional[RSDTunnel]:
+        """Start tunnel on Linux using pkexec."""
+        python_path = self._find_python_with_pymobiledevice3()
+
+        try:
+            subprocess.Popen(
+                ["pkexec", python_path, "-m", "pymobiledevice3", "remote", "tunneld", "-d"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+
+            return self._wait_for_tunnel(max_wait=10, udid=udid)
+
+        except Exception as e:
+            self._last_error = str(e)
+            return None
+
+    # =========================================================================
+    # Stop Tunnel
+    # =========================================================================
+
     def _stop_tunnel_macos(self) -> None:
         """Stop tunnel processes on macOS."""
         for pattern in ["pymobiledevice3.*start-tunnel", "pymobiledevice3.*tunneld"]:
@@ -363,27 +430,6 @@ class TunnelManager:
         except Exception:
             pass
 
-    # =========================================================================
-    # Linux Tunnel Start/Stop
-    # =========================================================================
-
-    def _start_tunnel_linux(self, udid: Optional[str] = None) -> Optional[RSDTunnel]:
-        """Start tunnel on Linux using pkexec."""
-        python_path = self._find_python_with_pymobiledevice3()
-
-        try:
-            subprocess.Popen(
-                ["pkexec", python_path, "-m", "pymobiledevice3", "remote", "tunneld", "-d"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-
-            return self._wait_for_tunnel(max_wait=10, udid=udid)
-
-        except Exception as e:
-            self._last_error = str(e)
-            return None
-
     def _stop_tunnel_linux(self) -> None:
         """Stop tunnel processes on Linux."""
         for pattern in ["pymobiledevice3.*start-tunnel", "pymobiledevice3.*tunneld"]:
@@ -396,7 +442,7 @@ class TunnelManager:
     # Helpers
     # =========================================================================
 
-    def _wait_for_tunnel(self, max_wait: int = 10, udid: Optional[str] = None) -> Optional[RSDTunnel]:
+    def _wait_for_tunnel(self, max_wait: int = 10, udid: str = None) -> Optional[RSDTunnel]:
         """Poll for tunnel to become available."""
         logger.info(f"Waiting for tunnel (max {max_wait}s)...")
 
@@ -411,7 +457,7 @@ class TunnelManager:
         self._last_error = "Tunnel did not become available"
         return None
 
-    def _parse_tunnel_from_log(self, log_path: str, udid: Optional[str] = None) -> Optional[RSDTunnel]:
+    def _parse_tunnel_from_log(self, log_path: str, udid: str) -> Optional[RSDTunnel]:
         """Parse tunnel info from log file."""
         try:
             if not os.path.exists(log_path):
@@ -426,15 +472,11 @@ class TunnelManager:
             # Pattern: --rsd <address> <port>
             match = re.search(r'--rsd\s+([a-fA-F0-9:]+)\s+(\d+)', content)
             if match:
-                tunnel = RSDTunnel(
+                return RSDTunnel(
                     address=match.group(1),
                     port=int(match.group(2)),
                     udid=udid
                 )
-                self._tunnel_info = tunnel
-                self._is_running = True
-                self._status_message = f"Running: {tunnel.address}:{tunnel.port}"
-                return tunnel
 
             return None
         except Exception:

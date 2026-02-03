@@ -18,7 +18,7 @@ import argparse
 from datetime import datetime
 from typing import Optional
 
-from models import Device
+from models import Device, DeviceType
 from services import DeviceManager, LocationService, TunnelManager, FavoritesService
 
 # Configure logging to stderr (stdout is for JSON-RPC communication)
@@ -43,8 +43,8 @@ class LocationSimulatorServer:
     def __init__(self):
         # Services
         self.devices = DeviceManager()
-        self.location = LocationService()
         self.tunnel = TunnelManager()
+        self.location = LocationService()
         self.favorites = FavoritesService()
 
         # State
@@ -120,7 +120,7 @@ class LocationSimulatorServer:
 
     async def _set_location(self, params: dict) -> dict:
         """Set location on selected device."""
-        if not self._selected_device:
+        if not self._selected_device and not params.get("udid"):
             return {"success": False, "error": "No device selected"}
 
         latitude = params.get("latitude")
@@ -129,16 +129,27 @@ class LocationSimulatorServer:
         if latitude is None or longitude is None:
             return {"success": False, "error": "latitude and longitude required"}
 
-        # Get fresh device state from DeviceManager (includes tunnel info)
+        # Get fresh device state from DeviceManager
         device = self.devices.get_device(self._selected_device.id)
         if not device:
             device = self._selected_device
 
+        # For physical devices, get tunnel from TunnelManager
+        tunnel = None
+        if device.type == DeviceType.PHYSICAL:
+            tunnel = await self.tunnel.get_tunnel(device.id)
+
         result = await self.location.set_location(
             device,
             float(latitude),
-            float(longitude)
+            float(longitude),
+            tunnel=tunnel
         )
+
+        # If tunnel was used but failed, invalidate it for refresh on next try
+        if tunnel and not result.get("success"):
+            self.tunnel.invalidate(device.id)
+
         return result
 
     async def _clear_location(self, params: dict) -> dict:
@@ -146,17 +157,34 @@ class LocationSimulatorServer:
         if not self._selected_device:
             return {"success": False, "error": "No device selected"}
 
-        # Get fresh device state from DeviceManager (includes tunnel info)
+        # Get fresh device state from DeviceManager
         device = self.devices.get_device(self._selected_device.id)
         if not device:
             device = self._selected_device
 
-        result = await self.location.clear_location(device)
+        # For physical devices, get tunnel from TunnelManager
+        tunnel = None
+        if device.type == DeviceType.PHYSICAL:
+            tunnel = await self.tunnel.get_tunnel(device.id)
+
+        result = await self.location.clear_location(device, tunnel=tunnel)
+
+        # If tunnel was used but failed, invalidate it for refresh on next try
+        if tunnel and not result.get("success"):
+            self.tunnel.invalidate(device.id)
+
         return result
 
     async def _start_tunnel(self, params: dict) -> dict:
         """Start RSD tunnel for iOS 17+ devices."""
+        # Get UDID from params or selected device
         udid = params.get("udid")
+        if not udid and self._selected_device:
+            udid = self._selected_device.id
+
+        if not udid:
+            return {"success": False, "error": "No device specified. Select a device first."}
+
         result = await self.tunnel.start_tunnel(udid)
 
         # Update device with tunnel info on success
@@ -165,28 +193,31 @@ class LocationSimulatorServer:
             tunnel = RSDTunnel(
                 address=result["address"],
                 port=result["port"],
-                udid=result.get("udid")
+                udid=udid
             )
-            # Update specified device or selected device
-            target_id = udid or (
-                self._selected_device.id if self._selected_device else None)
-            if target_id:
-                self.devices.update_tunnel(target_id, tunnel)
-                # Also update selected device if it's the same one
-                if self._selected_device and self._selected_device.id == target_id:
-                    self._selected_device.rsd_tunnel = tunnel
-                    logger.info(
-                        f"Updated selected device with tunnel: {tunnel.address}:{tunnel.port}")
+            self.devices.update_tunnel(udid, tunnel)
+            # Also update selected device if it's the same one
+            if self._selected_device and self._selected_device.id == udid:
+                self._selected_device.rsd_tunnel = tunnel
+                logger.info(f"Updated selected device with tunnel: {tunnel.address}:{tunnel.port}")
 
         return result
 
     async def _stop_tunnel(self, params: dict) -> dict:
-        """Stop RSD tunnel."""
-        return await self.tunnel.stop_tunnel()
+        """Stop RSD tunnel for device or all tunnels."""
+        udid = params.get("udid")
+        # If no UDID specified and we have a selected device, use that
+        if not udid and self._selected_device:
+            udid = self._selected_device.id
+        return await self.tunnel.stop_tunnel(udid)
 
     async def _get_tunnel_status(self, params: dict) -> dict:
         """Get current tunnel status."""
-        return self.tunnel.get_status()
+        udid = params.get("udid")
+        # If no UDID specified and we have a selected device, use that
+        if not udid and self._selected_device:
+            udid = self._selected_device.id
+        return self.tunnel.get_status(udid)
 
     # =========================================================================
     # Favorites Operations
@@ -400,6 +431,7 @@ class LocationSimulatorServer:
         finally:
             await runner.cleanup()
             logger.info("HTTP server shutdown")
+
 
 
 def main():

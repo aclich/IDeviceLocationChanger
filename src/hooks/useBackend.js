@@ -273,17 +273,19 @@ export function useBackend() {
     }
   }, []);
 
-  const stopTunnel = useCallback(async () => {
-    const response = await sendWithLogging('stopTunnel');
+  const stopTunnel = useCallback(async (udid = null) => {
+    const params = udid ? { udid } : {};
+    const response = await sendWithLogging('stopTunnel', params);
     if (response.result?.success) {
-      setTunnelStatus({ running: false });
+      setTunnelStatus({ running: false, status: 'no_tunnel' });
       logger.info('Tunnel stopped');
     }
     return response;
   }, []);
 
-  const getTunnelStatus = useCallback(async () => {
-    const response = await sendWithLogging('getTunnelStatus');
+  const getTunnelStatus = useCallback(async (udid = null) => {
+    const params = udid ? { udid } : {};
+    const response = await sendWithLogging('getTunnelStatus', params);
     if (response.result) {
       setTunnelStatus(response.result);
     }

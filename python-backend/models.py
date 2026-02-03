@@ -21,6 +21,16 @@ class ConnectionType(Enum):
     UNKNOWN = "Unknown"
 
 
+class TunnelStatus(Enum):
+    """Status of a device tunnel connection."""
+    NO_TUNNEL = "no_tunnel"          # No tunnel exists for this device
+    DISCOVERING = "discovering"       # Querying tunneld for tunnel info
+    CONNECTED = "connected"           # Tunnel validated and working
+    STALE = "stale"                   # Tunnel may be stale, needs revalidation
+    DISCONNECTED = "disconnected"     # Tunnel exists but device unreachable
+    ERROR = "error"                   # Error state
+
+
 @dataclass
 class RSDTunnel:
     """RSD tunnel connection info for iOS 17+ devices."""
@@ -37,6 +47,27 @@ class RSDTunnel:
             "address": self.address,
             "port": self.port,
             "udid": self.udid
+        }
+
+
+@dataclass
+class TunnelState:
+    """Per-device tunnel state managed by TunnelManager."""
+    udid: str
+    status: TunnelStatus = TunnelStatus.NO_TUNNEL
+    tunnel_info: Optional[RSDTunnel] = None
+    last_validated: float = 0.0       # Timestamp of last successful validation
+    last_queried: float = 0.0         # Timestamp of last tunneld query
+    error: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "udid": self.udid,
+            "status": self.status.value,
+            "tunnelInfo": self.tunnel_info.to_dict() if self.tunnel_info else None,
+            "lastValidated": self.last_validated,
+            "lastQueried": self.last_queried,
+            "error": self.error
         }
 
 

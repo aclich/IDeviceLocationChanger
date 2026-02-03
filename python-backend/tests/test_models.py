@@ -7,6 +7,8 @@ from models import (
     DeviceState,
     ConnectionType,
     RSDTunnel,
+    TunnelStatus,
+    TunnelState,
     PRODUCT_NAME_MAP,
 )
 
@@ -190,3 +192,87 @@ class TestProductNameMap:
     def test_iphone_15_pro_mapping(self):
         assert PRODUCT_NAME_MAP["iPhone16,1"] == "iPhone 15 Pro"
         assert PRODUCT_NAME_MAP["iPhone16,2"] == "iPhone 15 Pro Max"
+
+
+class TestTunnelStatus:
+    """Tests for TunnelStatus enum."""
+
+    def test_tunnel_status_values(self):
+        assert TunnelStatus.NO_TUNNEL.value == "no_tunnel"
+        assert TunnelStatus.DISCOVERING.value == "discovering"
+        assert TunnelStatus.CONNECTED.value == "connected"
+        assert TunnelStatus.STALE.value == "stale"
+        assert TunnelStatus.DISCONNECTED.value == "disconnected"
+        assert TunnelStatus.ERROR.value == "error"
+
+
+class TestTunnelState:
+    """Tests for TunnelState dataclass."""
+
+    def test_default_values(self):
+        state = TunnelState(udid="test-udid")
+
+        assert state.udid == "test-udid"
+        assert state.status == TunnelStatus.NO_TUNNEL
+        assert state.tunnel_info is None
+        assert state.last_validated == 0.0
+        assert state.last_queried == 0.0
+        assert state.error is None
+
+    def test_with_tunnel_info(self):
+        tunnel = RSDTunnel(address="192.168.1.1", port=8080, udid="test-udid")
+        state = TunnelState(
+            udid="test-udid",
+            status=TunnelStatus.CONNECTED,
+            tunnel_info=tunnel,
+            last_validated=1234567890.0,
+            last_queried=1234567880.0,
+        )
+
+        assert state.status == TunnelStatus.CONNECTED
+        assert state.tunnel_info.address == "192.168.1.1"
+        assert state.tunnel_info.port == 8080
+        assert state.last_validated == 1234567890.0
+
+    def test_with_error(self):
+        state = TunnelState(
+            udid="test-udid",
+            status=TunnelStatus.DISCONNECTED,
+            error="Connection refused",
+        )
+
+        assert state.status == TunnelStatus.DISCONNECTED
+        assert state.error == "Connection refused"
+
+    def test_to_dict_minimal(self):
+        state = TunnelState(udid="test-udid")
+        result = state.to_dict()
+
+        assert result == {
+            "udid": "test-udid",
+            "status": "no_tunnel",
+            "tunnelInfo": None,
+            "lastValidated": 0.0,
+            "lastQueried": 0.0,
+            "error": None,
+        }
+
+    def test_to_dict_full(self):
+        tunnel = RSDTunnel(address="10.0.0.1", port=9999, udid="test-udid")
+        state = TunnelState(
+            udid="test-udid",
+            status=TunnelStatus.CONNECTED,
+            tunnel_info=tunnel,
+            last_validated=1000.0,
+            last_queried=999.0,
+            error=None,
+        )
+        result = state.to_dict()
+
+        assert result["status"] == "connected"
+        assert result["tunnelInfo"] == {
+            "address": "10.0.0.1",
+            "port": 9999,
+            "udid": "test-udid",
+        }
+        assert result["lastValidated"] == 1000.0
