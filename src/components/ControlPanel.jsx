@@ -30,6 +30,8 @@ export function ControlPanel({
   onFavoriteSelect,
   onSaveFavorite,
   onManageFavorites,
+  canSaveLocation,
+  hasSelectedLocation,
 }) {
   const [mode, setMode] = useState(MODES.DIRECT);
   const [speed, setSpeed] = useState(5);
@@ -167,7 +169,8 @@ export function ControlPanel({
         onSelect={onFavoriteSelect}
         onSaveCurrent={onSaveFavorite}
         onManage={onManageFavorites}
-        canSaveCurrent={!!location}
+        canSaveCurrent={canSaveLocation}
+        hasSelectedLocation={hasSelectedLocation}
       />
 
       {/* Location info */}

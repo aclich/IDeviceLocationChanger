@@ -10,7 +10,7 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
 });
 
-export function MapWidget({ location, onLocationSelect, pendingLocation, cruiseTarget }) {
+export function MapWidget({ location, onLocationSelect, pendingLocation, cruiseTarget, flyTo }) {
   const mapRef = useRef(null);
   const containerRef = useRef(null);
   const mapInstance = useRef(null);
@@ -18,6 +18,14 @@ export function MapWidget({ location, onLocationSelect, pendingLocation, cruiseT
   const pendingMarkerRef = useRef(null);
   const targetMarkerRef = useRef(null);
   const routeLineRef = useRef(null);
+
+  // Fly to location when flyTo prop changes
+  useEffect(() => {
+    if (!mapInstance.current || !flyTo) return;
+    mapInstance.current.flyTo([flyTo.latitude, flyTo.longitude], 15, {
+      duration: 1,
+    });
+  }, [flyTo]);
 
   const handleCenterLocation = useCallback(() => {
     if (!mapInstance.current || !location) return;

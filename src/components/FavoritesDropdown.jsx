@@ -10,6 +10,7 @@ export function FavoritesDropdown({
   onSaveCurrent,
   onManage,
   canSaveCurrent,
+  hasSelectedLocation,
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef(null);
@@ -56,9 +57,9 @@ export function FavoritesDropdown({
               className="favorites-action-btn"
               onClick={handleSaveCurrent}
               disabled={!canSaveCurrent || isLoading}
-              title={!canSaveCurrent ? 'Set a location first' : 'Save current location'}
+              title={!canSaveCurrent ? 'Set or select a location first' : hasSelectedLocation ? 'Save selected location' : 'Save current location'}
             >
-              <span>⭐</span> Save Current
+              <span>⭐</span> {hasSelectedLocation ? 'Save Selected' : 'Save Current'}
             </button>
             <button
               className="favorites-action-btn"

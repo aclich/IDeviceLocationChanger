@@ -56,6 +56,7 @@ function App() {
   const [pendingLocation, setPendingLocation] = useState(null);
   const [showDebug, setShowDebug] = useState(false);
   const [showFavoritesManager, setShowFavoritesManager] = useState(false);
+  const [flyToLocation, setFlyToLocation] = useState(null);
 
   const handleMapClick = useCallback((lat, lng) => {
     setPendingLocation({ latitude: lat, longitude: lng });
@@ -89,14 +90,19 @@ function App() {
 
   // Favorites handlers
   const handleFavoriteSelect = useCallback((favorite) => {
-    setPendingLocation({ latitude: favorite.latitude, longitude: favorite.longitude });
+    const loc = { latitude: favorite.latitude, longitude: favorite.longitude };
+    setPendingLocation(loc);
+    // Fly map to the selected favorite
+    setFlyToLocation({ ...loc, timestamp: Date.now() });
   }, []);
 
   const handleSaveFavorite = useCallback(async () => {
-    if (location) {
-      await addFavorite(location.latitude, location.longitude);
+    // Prefer saving selected (pending) location, fall back to current location
+    const locToSave = pendingLocation || location;
+    if (locToSave) {
+      await addFavorite(locToSave.latitude, locToSave.longitude);
     }
-  }, [location, addFavorite]);
+  }, [pendingLocation, location, addFavorite]);
 
   // Calculate ETA for status bar
   const cruiseInfo = useMemo(() => {
@@ -176,6 +182,7 @@ function App() {
                 pendingLocation={pendingLocation}
                 cruiseTarget={cruiseTarget}
                 onLocationSelect={handleMapClick}
+                flyTo={flyToLocation}
               />
             </div>
 
@@ -212,6 +219,8 @@ function App() {
                 onFavoriteSelect={handleFavoriteSelect}
                 onSaveFavorite={handleSaveFavorite}
                 onManageFavorites={() => setShowFavoritesManager(true)}
+                canSaveLocation={!!(pendingLocation || location)}
+                hasSelectedLocation={!!pendingLocation}
               />
             </div>
           </div>
