@@ -1,5 +1,5 @@
 # Features
-- [x] Favorite location feature
+- [x] #1 Favorite location feature
     - having a list of saved locations to quickly jump to
     - the location simply save with txt, and load from txt file. Format is latitude,longitude,name (name is optional). each line is one location.
     - if the txt file is not found, create an empty one on app startup.
@@ -9,24 +9,38 @@
     - option to rename favorite locations
     - manage favorite locations in a separate popup window
     - auto-naming with reverse geocoding (Country / City / District format) using system locale
-- [ ] Pause/resume on Cruise mode
+- [x] #2 Pause/resume on Cruise mode (blocked by #Bugs2)
     - a button to pause/resume the cruise mode without clearing the target location
-- [ ] Keep refresh location
-    - a checkbox to enable/disable keep sending set location request even when not moving
-    - need to add slice location jittering when enabled
-    - refresh interval can be set by user, default to 5 seconds
-- [ ] Last Location on app restart
+    - see CruiseModeRefactor.md for more details
+- [x] #3 Last Location on app restart (related to #7)
     - save the last set location to a file on app exit
     - load the last set location from the file on app startup
     - if the file is not found, start with default location
-- [ ] Search bar on map to jump to location
+- [ ] #4 Search bar on map to jump to location
     - a search bar on top of the map to input city name, address or some keywords to search location
     - use some free geocoding API to get the location from the keywords
-- [ ] Unlock the speed limit with configurable max value
+- [x] #5 Unlock the speed limit with configurable max value
     - option to set custom speed limit, a check box above current speed slider to enable/disable it, when enabled, and a number input next to check box to set the custom max speed limit value of the slider
+- [x] #6 Debug page can set backend address and port
+    - in debug page, add input fields to set backend address and port, so user can connect to remote backend server
+- [x] #7 memory last position by device in backend (related to #8)
+- [x] #8 multi-device support
+    - Backend remove selected device logic.
+    - let frontend handle device selection, and send device id to backend when setting location eachtime.
 
 # Bugs
 - [x] Cruise mode not cleaning target icon on map when reaching destination
+- [x] Favorite Location reverse geocoding fail
+    - the reverse geocoding fail to get the address, need to investigate and fix it
+    - Fixed: Added https://nominatim.openstreetmap.org to CSP connect-src in index.html
+- [x] Browser mode, Cruise mode will stop working after tab is inactive for a while
+    - see CruiseModeRefactor.md for more details
+- [ ] Swtich to debug tab and back to Simumlator tap, the map will lost the current location centering and the icons
 
 # UI Improvements
 - [x] Make latitude/longitude text not split line when the number of digits change longer
+
+# Enhancements
+- [x] Favorite location
+    - Pane the map to the selected favorite location when clicked in the list
+    - Can save selected location, not only current location

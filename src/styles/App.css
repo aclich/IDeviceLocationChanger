@@ -422,6 +422,44 @@ body {
   margin-bottom: 12px;
 }
 
+.custom-speed-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.custom-speed-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.custom-speed-label input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+
+.custom-speed-input {
+  width: 70px;
+  padding: 4px 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: right;
+}
+
+.custom-speed-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .setting-row {
   margin-bottom: 12px;
 }

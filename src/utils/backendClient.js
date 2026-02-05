@@ -340,6 +340,31 @@ class BackendClient {
     this.reconnectAttempts = 0;
     logger.info('Disconnected');
   }
+
+  /**
+   * Update the base URL and reconnect
+   *
+   * @param {string} url - The new base URL
+   */
+  setBaseUrl(url) {
+    this._disconnectSSE();
+    this.baseUrl = url;
+    this.reconnectAttempts = 0;
+    logger.info(`Base URL updated to: ${url}`);
+    // Reconnect SSE if we had listeners
+    if (this.eventListeners.size > 0) {
+      this._connectSSE();
+    }
+  }
+
+  /**
+   * Get current base URL
+   *
+   * @returns {string} - The current base URL
+   */
+  getBaseUrl() {
+    return this.baseUrl;
+  }
 }
 
 // ============================================================================
@@ -353,10 +378,21 @@ let initPromise = null;
  * Get the backend URL from various sources
  * Handles async getBackendUrl from Electron preload
  *
+ * Priority: localStorage > Electron config > env variable > default
+ *
  * @returns {Promise<string>} - The backend URL
  */
 async function resolveBackendUrl() {
-  // Check Electron config first (async in new version)
+  // Check localStorage first (user-configured in debug page)
+  if (typeof window !== 'undefined' && window.localStorage) {
+    const storedUrl = window.localStorage.getItem('backendUrl');
+    if (storedUrl) {
+      logger.debug('Got backend URL from localStorage:', storedUrl);
+      return storedUrl;
+    }
+  }
+
+  // Check Electron config (async in new version)
   if (typeof window !== 'undefined' && window.electronConfig?.getBackendUrl) {
     try {
       const url = await window.electronConfig.getBackendUrl();
@@ -433,6 +469,21 @@ export async function initBackend() {
         // Get connection status
         get isConnected() {
           return clientInstance.connected;
+        },
+
+        // Get current base URL
+        getBaseUrl: () => clientInstance.getBaseUrl(),
+
+        // Update base URL and reconnect
+        setBaseUrl: (url) => {
+          clientInstance.setBaseUrl(url);
+          // Persist to localStorage
+          window.localStorage.setItem('backendUrl', url);
+        },
+
+        // Clear custom URL (revert to default)
+        clearCustomUrl: () => {
+          window.localStorage.removeItem('backendUrl');
         },
       };
 

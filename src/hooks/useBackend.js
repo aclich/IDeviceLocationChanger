@@ -198,8 +198,16 @@ export function useBackend() {
   // =========================================================================
 
   const setLocationOnDevice = useCallback(async (latitude, longitude) => {
+    if (!selectedDevice) {
+      setError('No device selected');
+      return { error: { message: 'No device selected' } };
+    }
     setError(null);
-    const response = await sendRequest('setLocation', { latitude, longitude });
+    const response = await sendRequest('setLocation', {
+      deviceId: selectedDevice.id,
+      latitude,
+      longitude,
+    });
     if (response.result?.success) {
       setLocation({ latitude, longitude });
     } else if (response.error) {
@@ -208,11 +216,17 @@ export function useBackend() {
       setError(response.result.error || 'Failed to set location');
     }
     return response;
-  }, []);
+  }, [selectedDevice]);
 
   const clearLocation = useCallback(async () => {
+    if (!selectedDevice) {
+      setError('No device selected');
+      return { error: { message: 'No device selected' } };
+    }
     setError(null);
-    const response = await sendRequest('clearLocation');
+    const response = await sendRequest('clearLocation', {
+      deviceId: selectedDevice.id,
+    });
     if (response.result?.success) {
       setLocation(null);
       logger.info('Location cleared');
@@ -220,7 +234,16 @@ export function useBackend() {
       setError(response.error.message);
     }
     return response;
-  }, []);
+  }, [selectedDevice]);
+
+  const getLastLocation = useCallback(async (deviceId = null) => {
+    const id = deviceId || selectedDevice?.id;
+    if (!id) {
+      return { error: { message: 'No device specified' } };
+    }
+    const response = await sendRequest('getLastLocation', { deviceId: id });
+    return response;
+  }, [selectedDevice]);
 
   // =========================================================================
   // Tunnel Operations
@@ -280,8 +303,13 @@ export function useBackend() {
   // =========================================================================
 
   const startCruise = useCallback(async (startLocation, targetLocation, speedKmh = 5) => {
+    if (!selectedDevice) {
+      setError('No device selected');
+      return { error: { message: 'No device selected' } };
+    }
     setError(null);
     const response = await sendRequest('startCruise', {
+      deviceId: selectedDevice.id,
       startLatitude: startLocation.latitude,
       startLongitude: startLocation.longitude,
       targetLatitude: targetLocation.latitude,
@@ -297,11 +325,16 @@ export function useBackend() {
       setError(response.result.error || 'Failed to start cruise');
     }
     return response;
-  }, []);
+  }, [selectedDevice]);
 
   const stopCruise = useCallback(async () => {
+    if (!selectedDevice) {
+      return { error: { message: 'No device selected' } };
+    }
     setError(null);
-    const response = await sendRequest('stopCruise', {});
+    const response = await sendRequest('stopCruise', {
+      deviceId: selectedDevice.id,
+    });
     if (response.result?.success) {
       setCruiseStatus(null);
       logger.info('Cruise stopped');
@@ -309,11 +342,16 @@ export function useBackend() {
       setError(response.error.message);
     }
     return response;
-  }, []);
+  }, [selectedDevice]);
 
   const pauseCruise = useCallback(async () => {
+    if (!selectedDevice) {
+      return { error: { message: 'No device selected' } };
+    }
     setError(null);
-    const response = await sendRequest('pauseCruise', {});
+    const response = await sendRequest('pauseCruise', {
+      deviceId: selectedDevice.id,
+    });
     if (response.result?.success) {
       setCruiseStatus(response.result.session);
       logger.info('Cruise paused');
@@ -321,11 +359,16 @@ export function useBackend() {
       setError(response.error.message);
     }
     return response;
-  }, []);
+  }, [selectedDevice]);
 
   const resumeCruise = useCallback(async () => {
+    if (!selectedDevice) {
+      return { error: { message: 'No device selected' } };
+    }
     setError(null);
-    const response = await sendRequest('resumeCruise', {});
+    const response = await sendRequest('resumeCruise', {
+      deviceId: selectedDevice.id,
+    });
     if (response.result?.success) {
       setCruiseStatus(response.result.session);
       logger.info('Cruise resumed');
@@ -333,23 +376,34 @@ export function useBackend() {
       setError(response.error.message);
     }
     return response;
-  }, []);
+  }, [selectedDevice]);
 
   const setCruiseSpeed = useCallback(async (speedKmh) => {
-    const response = await sendRequest('setCruiseSpeed', { speedKmh });
+    if (!selectedDevice) {
+      return { error: { message: 'No device selected' } };
+    }
+    const response = await sendRequest('setCruiseSpeed', {
+      deviceId: selectedDevice.id,
+      speedKmh,
+    });
     if (response.error) {
       setError(response.error.message);
     }
     return response;
-  }, []);
+  }, [selectedDevice]);
 
   const getCruiseStatus = useCallback(async () => {
-    const response = await sendRequest('getCruiseStatus', {});
+    if (!selectedDevice) {
+      return { error: { message: 'No device selected' } };
+    }
+    const response = await sendRequest('getCruiseStatus', {
+      deviceId: selectedDevice.id,
+    });
     if (response.result) {
       setCruiseStatus(response.result.state !== 'idle' ? response.result : null);
     }
     return response;
-  }, []);
+  }, [selectedDevice]);
 
   // =========================================================================
   // Return API
@@ -374,6 +428,7 @@ export function useBackend() {
     // Location actions
     setLocation: setLocationOnDevice,
     clearLocation,
+    getLastLocation,
 
     // Tunnel actions
     startTunnel,

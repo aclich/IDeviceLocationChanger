@@ -24,9 +24,10 @@ function App() {
     isConnected,
     isBrowserMode,
     listDevices,
-    selectDevice,
+    selectDevice: selectDeviceRaw,
     setLocation,
     clearLocation,
+    getLastLocation,
     startTunnel,
     stopTunnel,
     clearError,
@@ -37,6 +38,22 @@ function App() {
     resumeCruise,
     setCruiseSpeed,
   } = useBackend();
+
+  // Wrap selectDevice to restore last location
+  const selectDevice = useCallback(async (deviceId) => {
+    const response = await selectDeviceRaw(deviceId);
+    if (response?.result?.device) {
+      // Try to restore last location for this device
+      const lastLocResponse = await getLastLocation(deviceId);
+      if (lastLocResponse?.result?.success) {
+        const { latitude, longitude } = lastLocResponse.result;
+        // Set it as pending location and fly to it
+        setPendingLocation({ latitude, longitude });
+        setFlyToLocation({ latitude, longitude, timestamp: Date.now() });
+      }
+    }
+    return response;
+  }, [selectDeviceRaw, getLastLocation]);
 
   // Joystick movement control (runs in frontend - requires real-time input)
   const {

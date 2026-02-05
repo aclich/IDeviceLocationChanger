@@ -9,9 +9,29 @@ export function DebugPage() {
   const logRef = useRef(null);
   const requestIdRef = useRef(0);
 
-  // Check backend connection
+  // Backend address configuration
+  const [backendHost, setBackendHost] = useState('127.0.0.1');
+  const [backendPort, setBackendPort] = useState('8765');
+  const [isCustomBackend, setIsCustomBackend] = useState(false);
+
+  // Check backend connection and load saved backend address
   useEffect(() => {
     setIsConnected(!!window.backend);
+
+    // Load current backend URL
+    if (window.backend?.getBaseUrl) {
+      try {
+        const currentUrl = window.backend.getBaseUrl();
+        const url = new URL(currentUrl);
+        setBackendHost(url.hostname);
+        setBackendPort(url.port || '8765');
+        // Check if it's a custom URL (stored in localStorage)
+        const storedUrl = window.localStorage.getItem('backendUrl');
+        setIsCustomBackend(!!storedUrl);
+      } catch (e) {
+        console.error('Failed to parse backend URL:', e);
+      }
+    }
   }, []);
 
   // Auto-scroll outputs and logs
@@ -119,6 +139,38 @@ export function DebugPage() {
   const clearOutputs = useCallback(() => setOutputs([]), []);
   const clearLogs = useCallback(() => setLogs([]), []);
 
+  // Handle backend address change
+  const handleBackendConnect = useCallback(() => {
+    if (!window.backend?.setBaseUrl) {
+      addLog('error', 'Backend client does not support URL change');
+      return;
+    }
+
+    const newUrl = `http://${backendHost}:${backendPort}`;
+    window.backend.setBaseUrl(newUrl);
+    setIsCustomBackend(true);
+    addLog('info', `Connected to ${newUrl}`);
+
+    // Test connection
+    window.backend.checkHealth().then((healthy) => {
+      if (healthy) {
+        addLog('info', 'Backend health check passed');
+        setIsConnected(true);
+      } else {
+        addLog('error', 'Backend health check failed');
+        setIsConnected(false);
+      }
+    });
+  }, [backendHost, backendPort, addLog]);
+
+  const handleBackendReset = useCallback(() => {
+    if (window.backend?.clearCustomUrl) {
+      window.backend.clearCustomUrl();
+      addLog('info', 'Custom backend URL cleared. Reload the page to use default.');
+      setIsCustomBackend(false);
+    }
+  }, [addLog]);
+
   const presetCommands = [
     { label: 'List Devices', cmd: '{"method": "listDevices", "params": {}}' },
     { label: 'Select Device', cmd: '{"method": "selectDevice", "params": {"deviceId": "DEVICE_ID_HERE"}}' },
@@ -136,6 +188,34 @@ export function DebugPage() {
         <span className={`connection-status ${isConnected ? 'connected' : 'disconnected'}`}>
           {isConnected ? 'Connected' : 'Disconnected'}
         </span>
+      </div>
+
+      {/* Backend Address Configuration */}
+      <div className="debug-backend-config">
+        <label>Backend:</label>
+        <input
+          type="text"
+          className="backend-host-input"
+          value={backendHost}
+          onChange={(e) => setBackendHost(e.target.value)}
+          placeholder="Host"
+        />
+        <span className="backend-port-separator">:</span>
+        <input
+          type="text"
+          className="backend-port-input"
+          value={backendPort}
+          onChange={(e) => setBackendPort(e.target.value)}
+          placeholder="Port"
+        />
+        <button className="backend-connect-btn" onClick={handleBackendConnect}>
+          Connect
+        </button>
+        {isCustomBackend && (
+          <button className="backend-reset-btn" onClick={handleBackendReset}>
+            Reset
+          </button>
+        )}
       </div>
 
       {/* Preset Commands */}

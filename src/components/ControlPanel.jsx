@@ -40,6 +40,11 @@ export function ControlPanel({
   const [speed, setSpeed] = useState(5);
   const [coordInput, setCoordInput] = useState('');
   const [inputError, setInputError] = useState(null);
+  const [customSpeedEnabled, setCustomSpeedEnabled] = useState(false);
+  const [customMaxSpeed, setCustomMaxSpeed] = useState(100);
+
+  // Calculate effective max speed based on custom speed setting
+  const effectiveMaxSpeed = customSpeedEnabled ? customMaxSpeed : 50;
 
   // Parse coordinate input like "24.953683, 121.551809"
   const parseCoordinates = useCallback((input) => {
@@ -289,12 +294,40 @@ export function ControlPanel({
       {/* Movement settings (for joystick and cruise) */}
       {(mode === MODES.JOYSTICK || mode === MODES.CRUISE) && (
         <div className="settings-section">
+          <div className="custom-speed-row">
+            <label className="custom-speed-label">
+              <input
+                type="checkbox"
+                checked={customSpeedEnabled}
+                onChange={(e) => setCustomSpeedEnabled(e.target.checked)}
+              />
+              Custom max speed
+            </label>
+            {customSpeedEnabled && (
+              <input
+                type="number"
+                className="custom-speed-input"
+                value={customMaxSpeed}
+                min="1"
+                max="1000"
+                onChange={(e) => {
+                  const val = Math.max(1, parseInt(e.target.value) || 1);
+                  setCustomMaxSpeed(val);
+                  // If current speed exceeds new max, adjust it
+                  if (speed > val) {
+                    setSpeed(val);
+                    onSpeedChange?.(val);
+                  }
+                }}
+              />
+            )}
+          </div>
           <div className="setting-row">
             <label>Speed: {speed.toFixed(1)} km/h</label>
             <input
               type="range"
               min="1"
-              max="50"
+              max={effectiveMaxSpeed}
               step="0.5"
               value={speed}
               onChange={handleSpeedChange}

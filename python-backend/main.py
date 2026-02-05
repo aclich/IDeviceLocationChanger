@@ -22,7 +22,7 @@ from datetime import datetime
 from typing import Optional
 
 from models import Device, DeviceType
-from services import DeviceManager, LocationService, TunnelManager, FavoritesService, CruiseService, event_bus
+from services import DeviceManager, LocationService, TunnelManager, FavoritesService, CruiseService, LastLocationService, event_bus
 
 # Configure logging to stderr
 logging.basicConfig(
@@ -50,6 +50,7 @@ class LocationSimulatorServer:
         self.location = LocationService()
         self.favorites = FavoritesService()
         self.cruise = CruiseService()
+        self.last_locations = LastLocationService()
 
         # Wire up tunnel provider for retry mechanism
         # This allows LocationService to get fresh tunnel info on connection errors
@@ -85,6 +86,8 @@ class LocationSimulatorServer:
             "resumeCruise": self._resume_cruise,
             "setCruiseSpeed": self._set_cruise_speed,
             "getCruiseStatus": self._get_cruise_status,
+            # Last Location
+            "getLastLocation": self._get_last_location,
         }
 
         logger.info("Location Simulator Backend initialized")
@@ -135,6 +138,10 @@ class LocationSimulatorServer:
         # If tunnel was used but failed, invalidate it for refresh on next try
         if tunnel and not result.get("success"):
             self.tunnel.invalidate(device.id)
+
+        # Persist last location on success
+        if result.get("success"):
+            self.last_locations.update(device.id, latitude, longitude)
 
         return result
 
@@ -187,8 +194,21 @@ class LocationSimulatorServer:
         return {"success": True, "device": device.to_dict()}
 
     async def _set_location(self, params: dict) -> dict:
-        """Set location on selected device."""
-        if not self._selected_device and not params.get("udid"):
+        """Set location on selected device.
+
+        Accepts either deviceId parameter or uses selected device.
+        """
+        # Get device from params or fallback to selected device
+        device_id = params.get("deviceId")
+        if device_id:
+            device = self.devices.get_device(device_id)
+            if not device:
+                return {"success": False, "error": f"Device not found: {device_id}"}
+        elif self._selected_device:
+            device = self.devices.get_device(self._selected_device.id)
+            if not device:
+                device = self._selected_device
+        else:
             return {"success": False, "error": "No device selected"}
 
         latitude = params.get("latitude")
@@ -196,11 +216,6 @@ class LocationSimulatorServer:
 
         if latitude is None or longitude is None:
             return {"success": False, "error": "latitude and longitude required"}
-
-        # Get fresh device state from DeviceManager
-        device = self.devices.get_device(self._selected_device.id)
-        if not device:
-            device = self._selected_device
 
         # For physical devices, get tunnel from TunnelManager
         tunnel = None
@@ -218,17 +233,29 @@ class LocationSimulatorServer:
         if tunnel and not result.get("success"):
             self.tunnel.invalidate(device.id)
 
+        # Persist last location on success
+        if result.get("success"):
+            self.last_locations.update(device.id, float(latitude), float(longitude))
+
         return result
 
     async def _clear_location(self, params: dict) -> dict:
-        """Clear simulated location on selected device."""
-        if not self._selected_device:
-            return {"success": False, "error": "No device selected"}
+        """Clear simulated location on selected device.
 
-        # Get fresh device state from DeviceManager
-        device = self.devices.get_device(self._selected_device.id)
-        if not device:
-            device = self._selected_device
+        Accepts either deviceId parameter or uses selected device.
+        """
+        # Get device from params or fallback to selected device
+        device_id = params.get("deviceId")
+        if device_id:
+            device = self.devices.get_device(device_id)
+            if not device:
+                return {"success": False, "error": f"Device not found: {device_id}"}
+        elif self._selected_device:
+            device = self.devices.get_device(self._selected_device.id)
+            if not device:
+                device = self._selected_device
+        else:
+            return {"success": False, "error": "No device selected"}
 
         # For physical devices, get tunnel from TunnelManager
         tunnel = None
@@ -428,6 +455,25 @@ class LocationSimulatorServer:
             return {"success": False, "error": "No device specified"}
 
         return self.cruise.get_cruise_status(device_id)
+
+    # =========================================================================
+    # Last Location Operations
+    # =========================================================================
+
+    async def _get_last_location(self, params: dict) -> dict:
+        """Get the last set location for a device."""
+        device_id = params.get("deviceId")
+        if not device_id:
+            return {"success": False, "error": "deviceId required"}
+
+        location = self.last_locations.get(device_id)
+        if location:
+            return {
+                "success": True,
+                "latitude": location["lat"],
+                "longitude": location["lon"],
+            }
+        return {"success": False, "error": "No last location for this device"}
 
     # =========================================================================
     # HTTP Server
