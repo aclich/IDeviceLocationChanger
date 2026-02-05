@@ -1,88 +1,37 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { isBrowserMode } from '../utils/browserBackend';
+import { isBrowserMode } from '../utils/backendClient';
 
-// Simple logger utility
+// Simple logger for useBackend hook events
 const logger = {
-  prefix: '[Frontend]',
-
-  info: (...args) => {
-    console.log(`%c${logger.prefix} INFO`, 'color: #4ade80', ...args);
-  },
-
-  request: (method, params) => {
-    console.log(
-      `%c${logger.prefix} >>> REQUEST`,
-      'color: #60a5fa; font-weight: bold',
-      `\n  Method: ${method}`,
-      `\n  Params:`, params
-    );
-  },
-
-  response: (method, response, duration) => {
-    if (response.error) {
-      console.log(
-        `%c${logger.prefix} <<< RESPONSE (${duration}ms)`,
-        'color: #f87171; font-weight: bold',
-        `\n  Method: ${method}`,
-        `\n  Error:`, response.error
-      );
-    } else {
-      console.log(
-        `%c${logger.prefix} <<< RESPONSE (${duration}ms)`,
-        'color: #4ade80; font-weight: bold',
-        `\n  Method: ${method}`,
-        `\n  Result:`, response.result
-      );
-    }
-  },
-
-  event: (eventName, data) => {
-    console.log(
-      `%c${logger.prefix} <<< EVENT`,
-      'color: #c084fc; font-weight: bold',
-      `\n  Event: ${eventName}`,
-      `\n  Data:`, data
-    );
-  },
-
-  error: (...args) => {
-    console.error(`%c${logger.prefix} ERROR`, 'color: #f87171', ...args);
-  },
-
-  warn: (...args) => {
-    console.warn(`%c${logger.prefix} WARN`, 'color: #fbbf24', ...args);
-  },
+  prefix: '[useBackend]',
+  info: (...args) => console.log(`%c${logger.prefix}`, 'color: #4ade80', ...args),
+  error: (...args) => console.error(`%c${logger.prefix}`, 'color: #f87171', ...args),
+  warn: (...args) => console.warn(`%c${logger.prefix}`, 'color: #fbbf24', ...args),
 };
 
-// Wrapper for backend.send with logging
-async function sendWithLogging(method, params = {}) {
-  const startTime = performance.now();
-
-  logger.request(method, params);
-
+// Send request via window.backend (logging is handled by backendClient)
+async function sendRequest(method, params = {}) {
   try {
-    const response = await window.backend.send(method, params);
-    const duration = Math.round(performance.now() - startTime);
-    logger.response(method, response, duration);
-    return response;
+    return await window.backend.send(method, params);
   } catch (error) {
-    const duration = Math.round(performance.now() - startTime);
-    logger.error(`Request failed after ${duration}ms:`, error);
-    throw error;
+    logger.error(`Request failed:`, error);
+    return { error: { code: -1, message: error.message } };
   }
 }
 
 /**
  * Hook for backend communication.
- * Handles device management, location setting, and tunnel management.
+ * Handles device management, location setting, tunnel management, and cruise mode.
  *
- * Note: Cruise mode and joystick calculations are handled in useMovement hook.
+ * Note: Cruise mode runs in the backend to continue working when browser is inactive.
+ * Joystick calculations still happen in useMovement hook (requires real-time input).
  */
 export function useBackend() {
   const [devices, setDevices] = useState([]);
   const [selectedDevice, setSelectedDevice] = useState(null);
   const [location, setLocation] = useState(null);
   const [tunnelStatus, setTunnelStatus] = useState({ running: false });
+  const [cruiseStatus, setCruiseStatus] = useState(null); // { state, location, target, speedKmh, remainingKm }
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(true); // Updated in useEffect after backend init
@@ -90,28 +39,21 @@ export function useBackend() {
   const cleanupRef = useRef(null);
   const healthCheckRef = useRef(null);
 
-  // Check backend connection (browser mode only)
+  // Check backend connection
   const checkConnection = useCallback(async () => {
     if (!window.backend) {
       setIsConnected(false);
       return false;
     }
 
-    // If backend has checkHealth method (browser mode), use it
-    if (window.backend.checkHealth) {
-      const healthy = await window.backend.checkHealth();
-      setIsConnected(healthy);
-      if (!healthy) {
-        setError('Backend not running. Start with: python python-backend/main.py --http');
-      } else {
-        setError(null);
-      }
-      return healthy;
+    const healthy = await window.backend.checkHealth();
+    setIsConnected(healthy);
+    if (!healthy) {
+      setError('Backend not running. Start with: python python-backend/main.py');
+    } else {
+      setError(null);
     }
-
-    // Electron mode - assume connected
-    setIsConnected(true);
-    return true;
+    return healthy;
   }, []);
 
   // Listen for backend events and set up initial connection
@@ -123,24 +65,67 @@ export function useBackend() {
       return;
     }
 
-    // Browser mode: check health once on mount
-    if (isBrowserMode()) {
-      logger.info('Browser mode detected - checking backend health');
-      checkConnection();
-    }
+    // Check health on mount
+    logger.info('Checking backend health');
+    checkConnection();
 
-    logger.info('Setting up backend event listener');
+    logger.info('Setting up backend event listener (SSE)');
 
     cleanupRef.current = window.backend.onEvent((message) => {
-      logger.event(message.event, message.data);
-
+      // Handle events (logging is done in backendClient)
       switch (message.event) {
-        case 'error':
-          setError(message.data.message);
-          logger.error('Backend error event:', message.data.message);
+        case 'connected':
+          // SSE connection established
+          setIsConnected(true);
+          setError(null);
           break;
+
+        case 'error':
+          setError(message.data?.message || 'Unknown error');
+          break;
+
+        // Cruise events
+        case 'cruiseStarted':
+          setCruiseStatus(message.data);
+          break;
+
+        case 'cruiseUpdate':
+          setCruiseStatus(message.data);
+          // Update location from cruise movement
+          if (message.data?.location) {
+            setLocation(message.data.location);
+          }
+          break;
+
+        case 'cruiseArrived':
+          setCruiseStatus(null);
+          // Snap to final location
+          if (message.data?.location) {
+            setLocation(message.data.location);
+          }
+          logger.info(`Cruise arrived after ${message.data?.distanceTraveledKm?.toFixed(2)}km`);
+          break;
+
+        case 'cruiseStopped':
+          setCruiseStatus(null);
+          break;
+
+        case 'cruisePaused':
+          setCruiseStatus(message.data);
+          break;
+
+        case 'cruiseResumed':
+          setCruiseStatus(message.data);
+          break;
+
+        case 'cruiseError':
+          setCruiseStatus(null);
+          setError(`Cruise error: ${message.data?.error}`);
+          break;
+
         default:
-          logger.warn('Unknown event:', message.event);
+          // Unknown events are logged by backendClient
+          break;
       }
     });
 
@@ -152,10 +137,8 @@ export function useBackend() {
     };
   }, [checkConnection]);
 
-  // Health check interval - only runs when disconnected in browser mode
+  // Health check interval - only runs when disconnected
   useEffect(() => {
-    if (!isBrowserMode()) return;
-
     // Clear any existing interval
     if (healthCheckRef.current) {
       clearInterval(healthCheckRef.current);
@@ -184,7 +167,7 @@ export function useBackend() {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await sendWithLogging('listDevices');
+      const response = await sendRequest('listDevices');
       if (response.result) {
         setDevices(response.result.devices);
       } else if (response.error) {
@@ -198,7 +181,7 @@ export function useBackend() {
 
   const selectDevice = useCallback(async (deviceId) => {
     setError(null);
-    const response = await sendWithLogging('selectDevice', { deviceId });
+    const response = await sendRequest('selectDevice', { deviceId });
     if (response.result?.device) {
       setSelectedDevice(response.result.device);
       logger.info('Device selected:', response.result.device.name);
@@ -216,7 +199,7 @@ export function useBackend() {
 
   const setLocationOnDevice = useCallback(async (latitude, longitude) => {
     setError(null);
-    const response = await sendWithLogging('setLocation', { latitude, longitude });
+    const response = await sendRequest('setLocation', { latitude, longitude });
     if (response.result?.success) {
       setLocation({ latitude, longitude });
     } else if (response.error) {
@@ -229,7 +212,7 @@ export function useBackend() {
 
   const clearLocation = useCallback(async () => {
     setError(null);
-    const response = await sendWithLogging('clearLocation');
+    const response = await sendRequest('clearLocation');
     if (response.result?.success) {
       setLocation(null);
       logger.info('Location cleared');
@@ -248,7 +231,7 @@ export function useBackend() {
     setError(null);
     try {
       const params = udid ? { udid } : {};
-      const response = await sendWithLogging('startTunnel', params);
+      const response = await sendRequest('startTunnel', params);
       if (response.result) {
         if (response.result.success) {
           // Map backend response to frontend tunnelStatus format
@@ -275,7 +258,7 @@ export function useBackend() {
 
   const stopTunnel = useCallback(async (udid = null) => {
     const params = udid ? { udid } : {};
-    const response = await sendWithLogging('stopTunnel', params);
+    const response = await sendRequest('stopTunnel', params);
     if (response.result?.success) {
       setTunnelStatus({ running: false, status: 'no_tunnel' });
       logger.info('Tunnel stopped');
@@ -285,9 +268,85 @@ export function useBackend() {
 
   const getTunnelStatus = useCallback(async (udid = null) => {
     const params = udid ? { udid } : {};
-    const response = await sendWithLogging('getTunnelStatus', params);
+    const response = await sendRequest('getTunnelStatus', params);
     if (response.result) {
       setTunnelStatus(response.result);
+    }
+    return response;
+  }, []);
+
+  // =========================================================================
+  // Cruise Operations
+  // =========================================================================
+
+  const startCruise = useCallback(async (startLocation, targetLocation, speedKmh = 5) => {
+    setError(null);
+    const response = await sendRequest('startCruise', {
+      startLatitude: startLocation.latitude,
+      startLongitude: startLocation.longitude,
+      targetLatitude: targetLocation.latitude,
+      targetLongitude: targetLocation.longitude,
+      speedKmh,
+    });
+    if (response.result?.success) {
+      setCruiseStatus(response.result.session);
+      logger.info('Cruise started');
+    } else if (response.error) {
+      setError(response.error.message);
+    } else if (response.result && !response.result.success) {
+      setError(response.result.error || 'Failed to start cruise');
+    }
+    return response;
+  }, []);
+
+  const stopCruise = useCallback(async () => {
+    setError(null);
+    const response = await sendRequest('stopCruise', {});
+    if (response.result?.success) {
+      setCruiseStatus(null);
+      logger.info('Cruise stopped');
+    } else if (response.error) {
+      setError(response.error.message);
+    }
+    return response;
+  }, []);
+
+  const pauseCruise = useCallback(async () => {
+    setError(null);
+    const response = await sendRequest('pauseCruise', {});
+    if (response.result?.success) {
+      setCruiseStatus(response.result.session);
+      logger.info('Cruise paused');
+    } else if (response.error) {
+      setError(response.error.message);
+    }
+    return response;
+  }, []);
+
+  const resumeCruise = useCallback(async () => {
+    setError(null);
+    const response = await sendRequest('resumeCruise', {});
+    if (response.result?.success) {
+      setCruiseStatus(response.result.session);
+      logger.info('Cruise resumed');
+    } else if (response.error) {
+      setError(response.error.message);
+    }
+    return response;
+  }, []);
+
+  const setCruiseSpeed = useCallback(async (speedKmh) => {
+    const response = await sendRequest('setCruiseSpeed', { speedKmh });
+    if (response.error) {
+      setError(response.error.message);
+    }
+    return response;
+  }, []);
+
+  const getCruiseStatus = useCallback(async () => {
+    const response = await sendRequest('getCruiseStatus', {});
+    if (response.result) {
+      setCruiseStatus(response.result.state !== 'idle' ? response.result : null);
     }
     return response;
   }, []);
@@ -302,6 +361,7 @@ export function useBackend() {
     selectedDevice,
     location,
     tunnelStatus,
+    cruiseStatus,
     error,
     isLoading,
     isConnected,
@@ -319,6 +379,14 @@ export function useBackend() {
     startTunnel,
     stopTunnel,
     getTunnelStatus,
+
+    // Cruise actions
+    startCruise,
+    stopCruise,
+    pauseCruise,
+    resumeCruise,
+    setCruiseSpeed,
+    getCruiseStatus,
 
     // Utilities
     clearError: () => setError(null),

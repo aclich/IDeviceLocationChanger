@@ -3,9 +3,12 @@
 Location Simulator Backend
 
 A JSON-RPC server for iOS location simulation.
-Supports two modes:
-  - stdio mode (default): JSON-RPC over stdin/stdout for Electron
-  - HTTP mode (--http): HTTP server for browser access
+Runs as HTTP server with SSE support for real-time events.
+
+Endpoints:
+  - POST /rpc     - JSON-RPC requests
+  - GET  /events  - Server-Sent Events stream
+  - GET  /health  - Health check
 
 All coordinate calculations are handled by the frontend.
 """
@@ -19,9 +22,9 @@ from datetime import datetime
 from typing import Optional
 
 from models import Device, DeviceType
-from services import DeviceManager, LocationService, TunnelManager, FavoritesService
+from services import DeviceManager, LocationService, TunnelManager, FavoritesService, CruiseService, event_bus
 
-# Configure logging to stderr (stdout is for JSON-RPC communication)
+# Configure logging to stderr
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
@@ -37,7 +40,7 @@ class LocationSimulatorServer:
     JSON-RPC server for location simulation.
 
     Handles device discovery, tunnel management, and location injection.
-    All coordinate calculations (joystick, cruise) are done by the frontend.
+    Events are published via SSE for real-time updates to all connected clients.
     """
 
     def __init__(self):
@@ -46,10 +49,15 @@ class LocationSimulatorServer:
         self.tunnel = TunnelManager()
         self.location = LocationService()
         self.favorites = FavoritesService()
+        self.cruise = CruiseService()
 
         # Wire up tunnel provider for retry mechanism
         # This allows LocationService to get fresh tunnel info on connection errors
         self.location.set_tunnel_provider(self._get_tunnel_for_device)
+
+        # Wire up cruise service callbacks
+        self.cruise.set_location_callback(self._set_location_for_cruise)
+        self.cruise.set_event_emitter(self._emit_event)
 
         # State
         self._selected_device: Optional[Device] = None
@@ -70,6 +78,13 @@ class LocationSimulatorServer:
             "updateFavorite": self._update_favorite,
             "deleteFavorite": self._delete_favorite,
             "importFavorites": self._import_favorites,
+            # Cruise
+            "startCruise": self._start_cruise,
+            "stopCruise": self._stop_cruise,
+            "pauseCruise": self._pause_cruise,
+            "resumeCruise": self._resume_cruise,
+            "setCruiseSpeed": self._set_cruise_speed,
+            "getCruiseStatus": self._get_cruise_status,
         }
 
         logger.info("Location Simulator Backend initialized")
@@ -80,6 +95,48 @@ class LocationSimulatorServer:
         Queries tunneld for fresh tunnel info.
         """
         return await self.tunnel.get_tunnel(udid)
+
+    def _emit_event(self, event: dict) -> None:
+        """Emit an event to all SSE subscribers.
+
+        Events are JSON objects with 'event' and 'data' keys.
+        Used by CruiseService to send position updates.
+        """
+        event_bus.publish_sync(event)
+
+    async def _set_location_for_cruise(
+        self,
+        device_id: str,
+        latitude: float,
+        longitude: float
+    ) -> dict:
+        """Set location callback for CruiseService.
+
+        This is called by the cruise loop to update device location.
+        """
+        device = self.devices.get_device(device_id)
+        if not device:
+            device = self._selected_device
+        if not device:
+            return {"success": False, "error": "Device not found"}
+
+        # For physical devices, get tunnel from TunnelManager
+        tunnel = None
+        if device.type == DeviceType.PHYSICAL:
+            tunnel = await self.tunnel.get_tunnel(device.id)
+
+        result = await self.location.set_location(
+            device,
+            latitude,
+            longitude,
+            tunnel=tunnel
+        )
+
+        # If tunnel was used but failed, invalidate it for refresh on next try
+        if tunnel and not result.get("success"):
+            self.tunnel.invalidate(device.id)
+
+        return result
 
     # =========================================================================
     # JSON-RPC Handler
@@ -281,74 +338,109 @@ class LocationSimulatorServer:
         return self.favorites.import_from_file(file_path)
 
     # =========================================================================
-    # Main Loop (stdio mode)
+    # Cruise Operations
     # =========================================================================
 
-    async def run_stdio(self):
-        """Main loop for stdio mode - read from stdin, process, write to stdout."""
-        logger.info("=" * 60)
-        logger.info("Backend started (stdio mode) - waiting for requests")
-        logger.info("=" * 60)
+    async def _start_cruise(self, params: dict) -> dict:
+        """Start cruise mode towards a target location."""
+        # Get device ID from params or selected device
+        device_id = params.get("deviceId")
+        if not device_id and self._selected_device:
+            device_id = self._selected_device.id
 
-        loop = asyncio.get_event_loop()
-        reader = asyncio.StreamReader()
-        protocol = asyncio.StreamReaderProtocol(reader)
-        await loop.connect_read_pipe(lambda: protocol, sys.stdin)
+        if not device_id:
+            return {"success": False, "error": "No device specified"}
 
-        try:
-            while True:
-                try:
-                    line = await reader.readline()
-                    if not line:
-                        logger.info("EOF received - frontend closed")
-                        break
+        # Get coordinates
+        start_lat = params.get("startLatitude")
+        start_lon = params.get("startLongitude")
+        target_lat = params.get("targetLatitude")
+        target_lon = params.get("targetLongitude")
+        speed = params.get("speedKmh", 5.0)
 
-                    line_str = line.decode().strip()
-                    if not line_str:
-                        continue
+        if None in (start_lat, start_lon, target_lat, target_lon):
+            return {"success": False, "error": "Start and target coordinates required"}
 
-                    # Parse request
-                    request = json.loads(line_str)
-                    self._request_count += 1
-                    request_id = request.get("id", "?")
-                    method = request.get("method", "?")
+        return await self.cruise.start_cruise(
+            device_id=device_id,
+            start_lat=float(start_lat),
+            start_lon=float(start_lon),
+            target_lat=float(target_lat),
+            target_lon=float(target_lon),
+            speed_kmh=float(speed)
+        )
 
-                    # Log request
-                    logger.info(
-                        f"[{self._request_count}] << {method} (id={request_id})")
-                    logger.debug(f"    Params: {request.get('params', {})}")
+    async def _stop_cruise(self, params: dict) -> dict:
+        """Stop cruise mode."""
+        device_id = params.get("deviceId")
+        if not device_id and self._selected_device:
+            device_id = self._selected_device.id
 
-                    # Process
-                    start = datetime.now()
-                    response = await self.handle_request(request)
-                    elapsed = (datetime.now() - start).total_seconds() * 1000
+        if not device_id:
+            return {"success": False, "error": "No device specified"}
 
-                    # Log response
-                    if "error" in response:
-                        logger.error(
-                            f"[{self._request_count}] >> ERROR ({elapsed:.1f}ms): {response['error']}")
-                    else:
-                        logger.info(
-                            f"[{self._request_count}] >> OK ({elapsed:.1f}ms)")
+        return await self.cruise.stop_cruise(device_id)
 
-                    # Send response
-                    print(json.dumps(response), flush=True)
+    async def _pause_cruise(self, params: dict) -> dict:
+        """Pause cruise mode."""
+        device_id = params.get("deviceId")
+        if not device_id and self._selected_device:
+            device_id = self._selected_device.id
 
-                except json.JSONDecodeError as e:
-                    logger.error(f"Invalid JSON: {e}")
-                except Exception as e:
-                    logger.exception(f"Error: {e}")
-        finally:
-            # Clean up persistent connections on shutdown
-            await self.location.close_all_connections()
-            logger.info("Backend shutdown")
+        if not device_id:
+            return {"success": False, "error": "No device specified"}
+
+        return await self.cruise.pause_cruise(device_id)
+
+    async def _resume_cruise(self, params: dict) -> dict:
+        """Resume paused cruise mode."""
+        device_id = params.get("deviceId")
+        if not device_id and self._selected_device:
+            device_id = self._selected_device.id
+
+        if not device_id:
+            return {"success": False, "error": "No device specified"}
+
+        return await self.cruise.resume_cruise(device_id)
+
+    async def _set_cruise_speed(self, params: dict) -> dict:
+        """Set cruise speed."""
+        device_id = params.get("deviceId")
+        if not device_id and self._selected_device:
+            device_id = self._selected_device.id
+
+        if not device_id:
+            return {"success": False, "error": "No device specified"}
+
+        speed = params.get("speedKmh")
+        if speed is None:
+            return {"success": False, "error": "speedKmh required"}
+
+        return self.cruise.set_cruise_speed(device_id, float(speed))
+
+    async def _get_cruise_status(self, params: dict) -> dict:
+        """Get cruise status for a device."""
+        device_id = params.get("deviceId")
+        if not device_id and self._selected_device:
+            device_id = self._selected_device.id
+
+        if not device_id:
+            return {"success": False, "error": "No device specified"}
+
+        return self.cruise.get_cruise_status(device_id)
 
     # =========================================================================
-    # HTTP Server Mode
+    # HTTP Server
     # =========================================================================
 
     async def run_http(self, host: str = "127.0.0.1", port: int = 8765):
-        """Run as HTTP server for browser mode."""
+        """Run HTTP server with SSE support.
+        
+        Endpoints:
+          - POST /rpc     - JSON-RPC requests
+          - GET  /events  - Server-Sent Events stream
+          - GET  /health  - Health check
+        """
         try:
             from aiohttp import web
         except ImportError:
@@ -415,23 +507,87 @@ class LocationSimulatorServer:
                     status=500
                 )
 
+        async def handle_events(request: web.Request) -> web.StreamResponse:
+            """Handle Server-Sent Events (SSE) for real-time updates.
+            
+            Clients connect here to receive events like:
+              - cruiseUpdate
+              - cruiseStarted
+              - cruiseStopped
+              - cruiseArrived
+              - cruisePaused
+              - cruiseResumed
+              - cruiseError
+            """
+            response = web.StreamResponse(
+                status=200,
+                reason='OK',
+                headers={
+                    'Content-Type': 'text/event-stream',
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'keep-alive',
+                    'Access-Control-Allow-Origin': '*',
+                }
+            )
+            await response.prepare(request)
+            
+            logger.info("SSE client connecting...")
+            
+            try:
+                # Send initial connection event
+                await response.write(
+                    f"event: connected\ndata: {json.dumps({'status': 'connected'})}\n\n".encode()
+                )
+                
+                # Subscribe to event bus and stream events
+                async for event in event_bus.subscribe():
+                    if event is None:
+                        # Shutdown signal
+                        break
+                    
+                    # Format as SSE: event: <name>\ndata: <json>\n\n
+                    event_name = event.get("event", "message")
+                    event_data = json.dumps(event)
+                    sse_message = f"event: {event_name}\ndata: {event_data}\n\n"
+                    
+                    await response.write(sse_message.encode())
+                    
+            except asyncio.CancelledError:
+                logger.debug("SSE connection cancelled")
+            except ConnectionResetError:
+                logger.debug("SSE client disconnected")
+            except Exception as e:
+                logger.error(f"SSE error: {e}")
+            
+            return response
+
         async def handle_health(request: web.Request) -> web.Response:
             """Health check endpoint."""
-            return web.json_response({"status": "ok", "mode": "http"})
+            return web.json_response({
+                "status": "ok",
+                "mode": "http",
+                "subscribers": event_bus.subscriber_count
+            })
 
         # Create app with CORS middleware
         app = web.Application(middlewares=[cors_middleware])
-        app.router.add_route("*", "/rpc", handle_rpc)
-        app.router.add_route("*", "/health", handle_health)
+        app.router.add_route("POST", "/rpc", handle_rpc)
+        app.router.add_route("OPTIONS", "/rpc", handle_rpc)  # CORS preflight
+        app.router.add_route("GET", "/events", handle_events)
+        app.router.add_route("GET", "/health", handle_health)
+        app.router.add_route("OPTIONS", "/health", handle_health)
 
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, host, port)
 
         logger.info("=" * 60)
-        logger.info(f"Backend started (HTTP mode)")
+        logger.info(f"Backend started (HTTP mode with SSE)")
         logger.info(f"Server running at http://{host}:{port}")
-        logger.info(f"RPC endpoint: http://{host}:{port}/rpc")
+        logger.info(f"Endpoints:")
+        logger.info(f"  POST /rpc     - JSON-RPC requests")
+        logger.info(f"  GET  /events  - Server-Sent Events stream")
+        logger.info(f"  GET  /health  - Health check")
         logger.info("=" * 60)
 
         await site.start()
@@ -443,10 +599,11 @@ class LocationSimulatorServer:
         except asyncio.CancelledError:
             pass
         finally:
+            await event_bus.close()
+            await self.cruise.stop_all()
             await self.location.close_all_connections()
             await runner.cleanup()
             logger.info("HTTP server shutdown")
-
 
 
 def main():
@@ -455,7 +612,8 @@ def main():
     parser.add_argument(
         "--http",
         action="store_true",
-        help="Run as HTTP server (for browser mode)"
+        default=True,  # HTTP is now the default
+        help="Run as HTTP server (default)"
     )
     parser.add_argument(
         "--host",
@@ -472,10 +630,7 @@ def main():
 
     server = LocationSimulatorServer()
     try:
-        if args.http:
-            asyncio.run(server.run_http(args.host, args.port))
-        else:
-            asyncio.run(server.run_stdio())
+        asyncio.run(server.run_http(args.host, args.port))
     except KeyboardInterrupt:
         logger.info("Interrupted")
     except Exception as e:

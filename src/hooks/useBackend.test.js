@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useBackend } from './useBackend.js';
 
-// Mock the browserBackend module
-vi.mock('../utils/browserBackend', () => ({
+// Mock the backendClient module
+vi.mock('../utils/backendClient', () => ({
   isBrowserMode: vi.fn(() => true),
 }));
 
@@ -11,12 +11,11 @@ describe('useBackend', () => {
   beforeEach(() => {
     vi.useFakeTimers();
 
-    // Set up a mock browser backend
+    // Set up a mock backend
     window.backend = {
       send: vi.fn().mockResolvedValue({ result: {} }),
       onEvent: vi.fn().mockReturnValue(() => {}),
       checkHealth: vi.fn().mockResolvedValue(true),
-      isBrowserMode: true,
     };
   });
 
@@ -49,7 +48,7 @@ describe('useBackend', () => {
     });
   });
 
-  describe('connection check (browser mode)', () => {
+  describe('connection check', () => {
     it('checks connection health on mount', async () => {
       renderHook(() => useBackend());
 
@@ -212,34 +211,6 @@ describe('useBackend', () => {
       });
 
       expect(window.backend.checkHealth).toHaveBeenCalledTimes(callCount);
-    });
-  });
-
-  describe('Electron mode', () => {
-    beforeEach(async () => {
-      vi.resetModules();
-
-      vi.doMock('../utils/browserBackend', () => ({
-        isBrowserMode: vi.fn(() => false),
-      }));
-
-      // Re-setup backend without checkHealth (simulating Electron)
-      window.backend = {
-        send: vi.fn().mockResolvedValue({ result: {} }),
-        onEvent: vi.fn().mockReturnValue(() => {}),
-      };
-    });
-
-    it('assumes connected in Electron mode', async () => {
-      const { useBackend: useBackendElectron } = await import('./useBackend.js');
-
-      const { result } = renderHook(() => useBackendElectron());
-
-      await act(async () => {
-        await vi.runAllTimersAsync();
-      });
-
-      expect(result.current.isConnected).toBe(true);
     });
   });
 });

@@ -1,12 +1,17 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { moveLocation, directionFromOffset, speedMultiplier, bearingTo, distanceBetween } from '../utils/coordinateCalculator';
+import { moveLocation, directionFromOffset, speedMultiplier } from '../utils/coordinateCalculator';
 
-const UPDATE_INTERVAL_MS = 500; // 500ms between location updates
-const ARRIVAL_THRESHOLD_KM = 0.005; // 5 meters - consider arrived
+const UPDATE_INTERVAL_BASE_MS = 100; // Base interval between location updates
+const UPDATE_INTERVAL_JITTER_MS = 100; // Random jitter (0-100ms) added to base
+
+// Helper to get next interval with jitter (100-200ms)
+const getNextInterval = () => UPDATE_INTERVAL_BASE_MS + Math.random() * UPDATE_INTERVAL_JITTER_MS;
 
 /**
- * Hook for managing movement (cruise mode and joystick).
- * All coordinate calculations happen in frontend, then setLocation is called.
+ * Hook for managing joystick movement.
+ * Joystick mode requires real-time user input, so it stays in the frontend.
+ *
+ * Note: Cruise mode is now handled by the backend (useBackend hook).
  *
  * @param {Object} options
  * @param {Object} options.location - Current location {latitude, longitude}
@@ -16,15 +21,13 @@ export function useMovement({ location, setLocation }) {
   // Movement state
   const [isMoving, setIsMoving] = useState(false);
   const [speed, setSpeed] = useState(5.0); // km/h
-  const [cruiseTarget, setCruiseTarget] = useState(null); // {latitude, longitude}
 
   // Internal refs
-  const intervalRef = useRef(null);
+  const timeoutRef = useRef(null);
+  const lastUpdateTimeRef = useRef(null);
   const locationRef = useRef(location);
   const joystickRef = useRef({ dx: 0, dy: 0, maxDistance: 50 });
-  const modeRef = useRef(null); // 'cruise' or 'joystick'
   const speedRef = useRef(speed);
-  const targetRef = useRef(cruiseTarget);
 
   // Keep refs updated
   useEffect(() => {
@@ -35,15 +38,11 @@ export function useMovement({ location, setLocation }) {
     speedRef.current = speed;
   }, [speed]);
 
-  useEffect(() => {
-    targetRef.current = cruiseTarget;
-  }, [cruiseTarget]);
-
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
       }
     };
   }, []);
@@ -53,123 +52,68 @@ export function useMovement({ location, setLocation }) {
   // =========================================================================
 
   const stopMovementLoop = useCallback(() => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
     }
-    modeRef.current = null;
+    lastUpdateTimeRef.current = null;
     setIsMoving(false);
   }, []);
 
-  const startMovementLoop = useCallback((mode) => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
+  const startMovementLoop = useCallback(() => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
     }
 
-    modeRef.current = mode;
     setIsMoving(true);
+    lastUpdateTimeRef.current = performance.now();
 
-    intervalRef.current = setInterval(async () => {
+    const tick = async () => {
+      // Calculate actual elapsed time for accurate movement
+      const now = performance.now();
+      const durationSec = (now - lastUpdateTimeRef.current) / 1000;
+      lastUpdateTimeRef.current = now;
+
       const currentLoc = locationRef.current;
-      if (!currentLoc) return;
-
-      let newLat, newLon;
-      const durationSec = UPDATE_INTERVAL_MS / 1000;
-
-      if (modeRef.current === 'cruise') {
-        const target = targetRef.current;
-        if (!target) {
-          stopMovementLoop();
-          return;
-        }
-
-        // Calculate distance to target
-        const distance = distanceBetween(
-          currentLoc.latitude,
-          currentLoc.longitude,
-          target.latitude,
-          target.longitude
-        );
-
-        // Check if arrived
-        if (distance < ARRIVAL_THRESHOLD_KM) {
-          // Snap to target and stop
-          await setLocation(target.latitude, target.longitude);
-          setCruiseTarget(null); // Clear target so map icon is removed
-          stopMovementLoop();
-          return;
-        }
-
-        // Calculate bearing to target
-        const bearing = bearingTo(
-          currentLoc.latitude,
-          currentLoc.longitude,
-          target.latitude,
-          target.longitude
-        );
-
-        // Move towards target
-        [newLat, newLon] = moveLocation(
-          currentLoc.latitude,
-          currentLoc.longitude,
-          bearing,
-          speedRef.current,
-          durationSec
-        );
-      } else if (modeRef.current === 'joystick') {
-        // Joystick mode: direction and speed based on joystick position
-        const { dx, dy, maxDistance } = joystickRef.current;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-
-        if (distance < 1) {
-          return; // Joystick centered, don't move
-        }
-
-        const joystickDirection = directionFromOffset(dx, dy);
-        const speedMult = speedMultiplier(dx, dy, maxDistance);
-        const effectiveSpeed = speedRef.current * speedMult;
-
-        [newLat, newLon] = moveLocation(
-          currentLoc.latitude,
-          currentLoc.longitude,
-          joystickDirection,
-          effectiveSpeed,
-          durationSec
-        );
+      if (!currentLoc) {
+        timeoutRef.current = setTimeout(tick, getNextInterval());
+        return;
       }
 
-      if (newLat !== undefined && newLon !== undefined) {
-        // Update local ref immediately for smooth movement
-        locationRef.current = { latitude: newLat, longitude: newLon };
-        // Send to backend
-        await setLocation(newLat, newLon);
+      // Joystick mode: direction and speed based on joystick position
+      const { dx, dy, maxDistance } = joystickRef.current;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      if (distance < 1) {
+        // Joystick centered, don't move but keep loop running
+        timeoutRef.current = setTimeout(tick, getNextInterval());
+        return;
       }
-    }, UPDATE_INTERVAL_MS);
+
+      const joystickDirection = directionFromOffset(dx, dy);
+      const speedMult = speedMultiplier(dx, dy, maxDistance);
+      const effectiveSpeed = speedRef.current * speedMult;
+
+      const [newLat, newLon] = moveLocation(
+        currentLoc.latitude,
+        currentLoc.longitude,
+        joystickDirection,
+        effectiveSpeed,
+        durationSec
+      );
+
+      // Update local ref immediately for smooth movement
+      locationRef.current = { latitude: newLat, longitude: newLon };
+      // Send to backend
+      await setLocation(newLat, newLon);
+
+      // Schedule next tick with jitter
+      timeoutRef.current = setTimeout(tick, getNextInterval());
+    };
+
+    // Start the loop
+    timeoutRef.current = setTimeout(tick, getNextInterval());
   }, [setLocation, stopMovementLoop]);
-
-  // =========================================================================
-  // Cruise Mode
-  // =========================================================================
-
-  const startCruise = useCallback((target) => {
-    if (!locationRef.current) {
-      console.warn('Cannot start cruise: no location set');
-      return false;
-    }
-    if (!target) {
-      console.warn('Cannot start cruise: no target set');
-      return false;
-    }
-    setCruiseTarget(target);
-    targetRef.current = target;
-    startMovementLoop('cruise');
-    return true;
-  }, [startMovementLoop]);
-
-  const stopCruise = useCallback(() => {
-    stopMovementLoop();
-    setCruiseTarget(null);
-  }, [stopMovementLoop]);
 
   // =========================================================================
   // Joystick Mode
@@ -181,24 +125,22 @@ export function useMovement({ location, setLocation }) {
     const distance = Math.sqrt(dx * dx + dy * dy);
 
     // Start movement if joystick moved significantly
-    if (distance > 1 && modeRef.current !== 'joystick') {
+    if (distance > 1 && !timeoutRef.current) {
       if (!locationRef.current) {
         console.warn('Cannot start joystick movement: no location set');
         return;
       }
-      startMovementLoop('joystick');
+      startMovementLoop();
     }
     // Stop if joystick returned to center
-    else if (distance <= 1 && modeRef.current === 'joystick') {
+    else if (distance <= 1 && timeoutRef.current) {
       stopMovementLoop();
     }
   }, [startMovementLoop, stopMovementLoop]);
 
   const releaseJoystick = useCallback(() => {
     joystickRef.current = { dx: 0, dy: 0, maxDistance: 50 };
-    if (modeRef.current === 'joystick') {
-      stopMovementLoop();
-    }
+    stopMovementLoop();
   }, [stopMovementLoop]);
 
   // =========================================================================
@@ -217,12 +159,6 @@ export function useMovement({ location, setLocation }) {
     // State
     isMoving,
     speed,
-    cruiseTarget,
-
-    // Cruise mode
-    startCruise,
-    stopCruise,
-    setCruiseTarget,
 
     // Joystick mode
     updateJoystick,

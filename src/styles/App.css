@@ -612,6 +612,41 @@ body {
   border-color: var(--accent);
 }
 
+.map-follow-btn {
+  position: absolute;
+  bottom: 20px;
+  left: 20px;
+  z-index: 1000;
+  width: 40px;
+  height: 40px;
+  background: var(--bg-secondary);
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  box-shadow: 0 2px 8px var(--shadow);
+}
+
+.map-follow-btn:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.map-follow-btn.locked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.map-follow-btn.unlocked {
+  background: var(--bg-secondary);
+  border-color: var(--warning, #f59e0b);
+}
+
 /* Connection status indicator (browser mode) */
 .connection-status {
   position: absolute;

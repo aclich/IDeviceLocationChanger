@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -19,6 +19,9 @@ export function MapWidget({ location, onLocationSelect, pendingLocation, cruiseT
   const targetMarkerRef = useRef(null);
   const routeLineRef = useRef(null);
 
+  // Map follow mode - when true, map auto-pans to follow location updates
+  const [followLocation, setFollowLocation] = useState(true);
+
   // Fly to location when flyTo prop changes
   useEffect(() => {
     if (!mapInstance.current || !flyTo) return;
@@ -31,6 +34,10 @@ export function MapWidget({ location, onLocationSelect, pendingLocation, cruiseT
     if (!mapInstance.current || !location) return;
     mapInstance.current.setView([location.latitude, location.longitude], mapInstance.current.getZoom());
   }, [location]);
+
+  const handleToggleFollow = useCallback(() => {
+    setFollowLocation((prev) => !prev);
+  }, []);
 
   const handleGetDeviceLocation = useCallback(() => {
     console.log('[Geolocation] Requesting device location...');
@@ -154,8 +161,11 @@ export function MapWidget({ location, onLocationSelect, pendingLocation, cruiseT
         .bindPopup('Current Location');
     }
 
-    mapInstance.current.panTo([latitude, longitude]);
-  }, [location]);
+    // Only pan to location if follow mode is enabled
+    if (followLocation) {
+      mapInstance.current.panTo([latitude, longitude]);
+    }
+  }, [location, followLocation]);
 
   // Update pending marker when user clicks
   useEffect(() => {
@@ -271,6 +281,13 @@ export function MapWidget({ location, onLocationSelect, pendingLocation, cruiseT
         title="Go to device GPS location"
       >
         📍
+      </button>
+      <button
+        className={`map-follow-btn ${followLocation ? 'locked' : 'unlocked'}`}
+        onClick={handleToggleFollow}
+        title={followLocation ? 'Map follows location (click to unlock)' : 'Map unlocked (click to follow location)'}
+      >
+        {followLocation ? '🔒' : '🔓'}
       </button>
     </div>
   );

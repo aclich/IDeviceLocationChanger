@@ -1,9 +1,21 @@
-const { app, BrowserWindow, ipcMain, session } = require('electron');
+/**
+ * Electron Main Process
+ *
+ * Simplified version that:
+ * 1. Starts the Python HTTP backend
+ * 2. Creates the browser window
+ * 3. Passes backend URL to renderer via preload
+ *
+ * No IPC handlers needed - frontend communicates directly via HTTP/SSE.
+ */
+
+const { app, BrowserWindow, session, ipcMain } = require('electron');
 const path = require('path');
 const PythonBridge = require('./python-bridge');
 
 let mainWindow;
 let pythonBridge;
+let backendUrl = 'http://127.0.0.1:8765'; // Default, updated when Python starts
 
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
@@ -38,7 +50,7 @@ function createWindow() {
 app.whenReady().then(async () => {
   // Grant geolocation permission automatically
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-    console.log('[Permission] Requested:', permission);
+    console.log('[Electron] Permission requested:', permission);
     if (permission === 'geolocation') {
       callback(true);
       return;
@@ -46,25 +58,21 @@ app.whenReady().then(async () => {
     callback(false);
   });
 
-  // Start Python backend
+  // Start Python backend (HTTP server)
   pythonBridge = new PythonBridge();
 
   try {
     await pythonBridge.start();
-    console.log('Python backend started');
+    backendUrl = pythonBridge.getUrl();
+    console.log('[Electron] Python backend started at', backendUrl);
   } catch (err) {
-    console.error('Failed to start Python backend:', err);
+    console.error('[Electron] Failed to start Python backend:', err);
+    // Continue anyway - user will see connection error in UI
   }
 
-  // Forward events from Python to renderer
-  pythonBridge.on('event', (event) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('backend-event', event);
-    }
-  });
-
   pythonBridge.on('exit', (code) => {
-    console.log('Python backend exited, code:', code);
+    console.log('[Electron] Python backend exited with code:', code);
+    // Could show error dialog here if needed
   });
 
   createWindow();
@@ -91,14 +99,6 @@ app.on('before-quit', () => {
   }
 });
 
-// Handle IPC from renderer
-ipcMain.handle('backend-request', async (event, request) => {
-  if (!pythonBridge) {
-    return { error: { code: -1, message: 'Backend not initialized' } };
-  }
-  try {
-    return await pythonBridge.send(request);
-  } catch (err) {
-    return { error: { code: -1, message: err.message } };
-  }
-});
+// No IPC handlers needed - frontend communicates directly with backend via HTTP/SSE
+// Except for getting the backend URL
+ipcMain.handle('get-backend-url', () => backendUrl);

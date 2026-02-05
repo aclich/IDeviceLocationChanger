@@ -17,12 +17,15 @@ export function ControlPanel({
   onClearLocation,
   onStartCruise,
   onStopCruise,
+  onPauseCruise,
+  onResumeCruise,
   onJoystickMove,
   onJoystickRelease,
   onSpeedChange,
   onDirectInput,
   isMoving,
   cruiseTarget,
+  cruiseStatus,
   onModeChange,
   // Favorites
   favorites,
@@ -88,11 +91,23 @@ export function ControlPanel({
     onModeChange?.(newMode);
   };
 
+  // Cruise state helpers
+  const isCruising = cruiseStatus?.state === 'running' || cruiseStatus?.state === 'paused';
+  const isPaused = cruiseStatus?.state === 'paused';
+
   const handleCruiseToggle = () => {
-    if (isMoving) {
+    if (isCruising) {
       onStopCruise?.();
     } else if (pendingLocation) {
       onStartCruise?.(pendingLocation);
+    }
+  };
+
+  const handlePauseResume = () => {
+    if (isPaused) {
+      onResumeCruise?.();
+    } else {
+      onPauseCruise?.();
     }
   };
 
@@ -103,8 +118,31 @@ export function ControlPanel({
     return `${Math.abs(loc.latitude).toFixed(6)}° ${latDir}, ${Math.abs(loc.longitude).toFixed(6)}° ${lonDir}`;
   };
 
-  // Calculate ETA for cruise mode
+  // Calculate ETA for cruise mode - use cruiseStatus if available (more accurate)
   const cruiseETA = useMemo(() => {
+    // When cruising, use backend-provided remaining distance
+    if (isCruising && cruiseStatus?.remainingKm !== undefined) {
+      const distanceKm = cruiseStatus.remainingKm;
+      const speedKmh = cruiseStatus.speedKmh || speed;
+      if (speedKmh <= 0) return null;
+
+      const timeHours = distanceKm / speedKmh;
+      const timeSeconds = timeHours * 3600;
+
+      if (timeSeconds < 60) {
+        return `${Math.ceil(timeSeconds)}s`;
+      } else if (timeSeconds < 3600) {
+        const mins = Math.floor(timeSeconds / 60);
+        const secs = Math.ceil(timeSeconds % 60);
+        return `${mins}m ${secs}s`;
+      } else {
+        const hours = Math.floor(timeHours);
+        const mins = Math.ceil((timeHours - hours) * 60);
+        return `${hours}h ${mins}m`;
+      }
+    }
+
+    // Fallback for preview (before cruise starts)
     if (!location || !cruiseTarget || speed <= 0) return null;
 
     const distanceKm = distanceBetween(
@@ -128,10 +166,20 @@ export function ControlPanel({
       const mins = Math.ceil((timeHours - hours) * 60);
       return `${hours}h ${mins}m`;
     }
-  }, [location, cruiseTarget, speed]);
+  }, [isCruising, cruiseStatus, location, cruiseTarget, speed]);
 
   // Calculate distance to target
   const distanceToTarget = useMemo(() => {
+    // When cruising, use backend-provided remaining distance
+    if (isCruising && cruiseStatus?.remainingKm !== undefined) {
+      const distanceKm = cruiseStatus.remainingKm;
+      if (distanceKm < 1) {
+        return `${(distanceKm * 1000).toFixed(0)}m`;
+      }
+      return `${distanceKm.toFixed(2)}km`;
+    }
+
+    // Fallback for preview
     if (!location || !cruiseTarget) return null;
 
     const distanceKm = distanceBetween(
@@ -145,7 +193,7 @@ export function ControlPanel({
       return `${(distanceKm * 1000).toFixed(0)}m`;
     }
     return `${distanceKm.toFixed(2)}km`;
-  }, [location, cruiseTarget]);
+  }, [isCruising, cruiseStatus, location, cruiseTarget]);
 
   return (
     <div className="control-panel">
@@ -271,14 +319,14 @@ export function ControlPanel({
       {mode === MODES.CRUISE && (
         <div className="cruise-controls">
           <p className="cruise-instruction">
-            {isMoving
-              ? 'Moving towards destination...'
+            {isCruising
+              ? (isPaused ? 'Cruise paused' : 'Moving towards destination...')
               : 'Click on the map to select a destination'}
           </p>
 
           {/* ETA display when cruising */}
-          {isMoving && cruiseTarget && cruiseETA && (
-            <div className="cruise-eta">
+          {isCruising && cruiseTarget && cruiseETA && (
+            <div className={`cruise-eta ${isPaused ? 'paused' : ''}`}>
               <div className="eta-row">
                 <span className="eta-label">Distance:</span>
                 <span className="eta-value">{distanceToTarget}</span>
@@ -287,11 +335,17 @@ export function ControlPanel({
                 <span className="eta-label">ETA:</span>
                 <span className="eta-value">{cruiseETA}</span>
               </div>
+              {isPaused && (
+                <div className="eta-row paused-indicator">
+                  <span className="eta-label">Status:</span>
+                  <span className="eta-value paused">PAUSED</span>
+                </div>
+              )}
             </div>
           )}
 
           {/* ETA preview before starting */}
-          {!isMoving && pendingLocation && location && (
+          {!isCruising && pendingLocation && location && (
             <div className="cruise-eta preview">
               <div className="eta-row">
                 <span className="eta-label">Distance:</span>
@@ -318,17 +372,38 @@ export function ControlPanel({
             </div>
           )}
 
-          <button
-            className={`btn ${isMoving ? 'btn-danger' : 'btn-primary'}`}
-            onClick={handleCruiseToggle}
-            disabled={!selectedDevice || (!location && !isMoving) || (!pendingLocation && !isMoving)}
-          >
-            {isMoving ? 'Stop' : 'Start Cruise'}
-          </button>
-          {!location && !isMoving && (
+          {/* Cruise control buttons */}
+          <div className="cruise-buttons">
+            {isCruising ? (
+              <>
+                <button
+                  className={`btn ${isPaused ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={handlePauseResume}
+                >
+                  {isPaused ? 'Resume' : 'Pause'}
+                </button>
+                <button
+                  className="btn btn-danger"
+                  onClick={handleCruiseToggle}
+                >
+                  Stop
+                </button>
+              </>
+            ) : (
+              <button
+                className="btn btn-primary"
+                onClick={handleCruiseToggle}
+                disabled={!selectedDevice || !location || !pendingLocation}
+              >
+                Start Cruise
+              </button>
+            )}
+          </div>
+
+          {!location && !isCruising && (
             <p className="cruise-hint">Set a starting location first</p>
           )}
-          {location && !pendingLocation && !isMoving && (
+          {location && !pendingLocation && !isCruising && (
             <p className="cruise-hint">Click on the map to select destination</p>
           )}
         </div>

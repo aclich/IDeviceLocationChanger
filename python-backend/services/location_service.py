@@ -21,7 +21,7 @@ Features:
 
 import asyncio
 import logging
-import subprocess
+import subprocess;
 import time
 from typing import Callable, Optional, Awaitable
 

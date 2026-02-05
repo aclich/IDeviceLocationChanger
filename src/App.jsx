@@ -18,6 +18,7 @@ function App() {
     selectedDevice,
     location,
     tunnelStatus,
+    cruiseStatus,
     error,
     isLoading,
     isConnected,
@@ -29,19 +30,27 @@ function App() {
     startTunnel,
     stopTunnel,
     clearError,
+    // Cruise operations (run in backend)
+    startCruise: backendStartCruise,
+    stopCruise: backendStopCruise,
+    pauseCruise,
+    resumeCruise,
+    setCruiseSpeed,
   } = useBackend();
 
-  // Movement control (cruise/joystick) - runs in frontend
+  // Joystick movement control (runs in frontend - requires real-time input)
   const {
-    isMoving,
+    isMoving: isJoystickMoving,
     speed,
-    cruiseTarget,
-    startCruise,
-    stopCruise,
     updateJoystick,
     releaseJoystick,
     setSpeed,
   } = useMovement({ location, setLocation });
+
+  // Derive cruise state from backend
+  const isCruising = cruiseStatus?.state === 'running' || cruiseStatus?.state === 'paused';
+  const isMoving = isJoystickMoving || isCruising;
+  const cruiseTarget = cruiseStatus?.target || null;
 
   // Favorites management
   const {
@@ -78,15 +87,36 @@ function App() {
     await setLocation(lat, lng);
   }, [setLocation]);
 
-  const handleStartCruise = useCallback((target) => {
-    if (startCruise(target)) {
+  const handleStartCruise = useCallback(async (target) => {
+    if (!location) {
+      console.warn('Cannot start cruise: no location set');
+      return;
+    }
+    const response = await backendStartCruise(location, target, speed);
+    if (response?.result?.success) {
       setPendingLocation(null); // Clear pending after starting cruise
     }
-  }, [startCruise]);
+  }, [location, speed, backendStartCruise]);
 
   const handleStopCruise = useCallback(() => {
-    stopCruise();
-  }, [stopCruise]);
+    backendStopCruise();
+  }, [backendStopCruise]);
+
+  const handlePauseCruise = useCallback(() => {
+    pauseCruise();
+  }, [pauseCruise]);
+
+  const handleResumeCruise = useCallback(() => {
+    resumeCruise();
+  }, [resumeCruise]);
+
+  // Update cruise speed when slider changes during cruise
+  const handleSpeedChange = useCallback((newSpeed) => {
+    setSpeed(newSpeed);
+    if (isCruising) {
+      setCruiseSpeed(newSpeed);
+    }
+  }, [setSpeed, isCruising, setCruiseSpeed]);
 
   // Favorites handlers
   const handleFavoriteSelect = useCallback((favorite) => {
@@ -106,16 +136,14 @@ function App() {
 
   // Calculate ETA for status bar
   const cruiseInfo = useMemo(() => {
-    if (!isMoving || !location || !cruiseTarget || speed <= 0) return null;
+    if (!isCruising || !cruiseStatus) return null;
 
-    const distanceKm = distanceBetween(
-      location.latitude,
-      location.longitude,
-      cruiseTarget.latitude,
-      cruiseTarget.longitude
-    );
+    const distanceKm = cruiseStatus.remainingKm || 0;
+    const speedKmh = cruiseStatus.speedKmh || speed;
 
-    const timeHours = distanceKm / speed;
+    if (speedKmh <= 0) return null;
+
+    const timeHours = distanceKm / speedKmh;
     const timeSeconds = timeHours * 3600;
 
     let eta;
@@ -133,8 +161,10 @@ function App() {
 
     const dist = distanceKm < 1 ? `${(distanceKm * 1000).toFixed(0)}m` : `${distanceKm.toFixed(2)}km`;
 
-    return { eta, distance: dist };
-  }, [isMoving, location, cruiseTarget, speed]);
+    const isPaused = cruiseStatus.state === 'paused';
+
+    return { eta, distance: dist, isPaused };
+  }, [isCruising, cruiseStatus, speed]);
 
   return (
     <div className="app">
@@ -206,13 +236,16 @@ function App() {
                 isMoving={isMoving}
                 speed={speed}
                 cruiseTarget={cruiseTarget}
+                cruiseStatus={cruiseStatus}
                 onSetLocation={handleSetLocation}
                 onClearLocation={handleClearLocation}
                 onStartCruise={handleStartCruise}
                 onStopCruise={handleStopCruise}
+                onPauseCruise={handlePauseCruise}
+                onResumeCruise={handleResumeCruise}
                 onJoystickMove={updateJoystick}
                 onJoystickRelease={releaseJoystick}
-                onSpeedChange={setSpeed}
+                onSpeedChange={handleSpeedChange}
                 onDirectInput={handleDirectInput}
                 favorites={favorites}
                 favoritesLoading={favoritesLoading}
@@ -237,9 +270,9 @@ function App() {
                 Location: {location.latitude.toFixed(6)}, {location.longitude.toFixed(6)}
               </span>
             )}
-            {isMoving && cruiseInfo && (
+            {isCruising && cruiseInfo && (
               <span>
-                Cruising: {cruiseInfo.distance} remaining • ETA {cruiseInfo.eta} • {speed.toFixed(1)} km/h
+                {cruiseInfo.isPaused ? 'Paused' : 'Cruising'}: {cruiseInfo.distance} remaining • ETA {cruiseInfo.eta} • {speed.toFixed(1)} km/h
               </span>
             )}
           </div>
