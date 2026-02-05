@@ -22,7 +22,7 @@ from datetime import datetime
 from typing import Optional
 
 from models import Device, DeviceType
-from services import DeviceManager, LocationService, TunnelManager, FavoritesService, CruiseService, LastLocationService, event_bus
+from services import DeviceManager, LocationService, TunnelManager, FavoritesService, CruiseService, LastLocationService, PortForwardService, event_bus
 
 # Configure logging to stderr
 logging.basicConfig(
@@ -51,6 +51,7 @@ class LocationSimulatorServer:
         self.favorites = FavoritesService()
         self.cruise = CruiseService()
         self.last_locations = LastLocationService()
+        self.port_forward = PortForwardService()
 
         # Wire up tunnel provider for retry mechanism
         # This allows LocationService to get fresh tunnel info on connection errors
@@ -88,6 +89,11 @@ class LocationSimulatorServer:
             "getCruiseStatus": self._get_cruise_status,
             # Last Location
             "getLastLocation": self._get_last_location,
+            # Port Forwarding
+            "listInterfaces": self._list_interfaces,
+            "startPortForward": self._start_port_forward,
+            "stopPortForward": self._stop_port_forward,
+            "listPortForwards": self._list_port_forwards,
         }
 
         logger.info("Location Simulator Backend initialized")
@@ -476,6 +482,53 @@ class LocationSimulatorServer:
         return {"success": False, "error": "No last location for this device"}
 
     # =========================================================================
+    # Port Forwarding Operations
+    # =========================================================================
+
+    async def _list_interfaces(self, params: dict) -> dict:
+        """List available network interfaces."""
+        interfaces = self.port_forward.list_interfaces()
+        return {"interfaces": interfaces}
+
+    async def _start_port_forward(self, params: dict) -> dict:
+        """Start a TCP port forward."""
+        listen_ip = params.get("listenIp")
+        listen_port = params.get("listenPort")
+        target_ip = params.get("targetIp", "127.0.0.1")
+        target_port = params.get("targetPort")
+
+        if not listen_ip:
+            return {"success": False, "error": "listenIp required"}
+        if not listen_port:
+            return {"success": False, "error": "listenPort required"}
+        if not target_port:
+            return {"success": False, "error": "targetPort required"}
+
+        return await self.port_forward.start_forward(
+            listen_ip,
+            int(listen_port),
+            target_ip,
+            int(target_port)
+        )
+
+    async def _stop_port_forward(self, params: dict) -> dict:
+        """Stop a TCP port forward."""
+        listen_ip = params.get("listenIp")
+        listen_port = params.get("listenPort")
+
+        if not listen_ip:
+            return {"success": False, "error": "listenIp required"}
+        if not listen_port:
+            return {"success": False, "error": "listenPort required"}
+
+        return await self.port_forward.stop_forward(listen_ip, int(listen_port))
+
+    async def _list_port_forwards(self, params: dict) -> dict:
+        """List active port forwards."""
+        forwards = self.port_forward.list_forwards()
+        return {"forwards": forwards}
+
+    # =========================================================================
     # HTTP Server
     # =========================================================================
 
@@ -647,6 +700,7 @@ class LocationSimulatorServer:
         finally:
             await event_bus.close()
             await self.cruise.stop_all()
+            await self.port_forward.stop_all()
             await self.location.close_all_connections()
             await runner.cleanup()
             logger.info("HTTP server shutdown")

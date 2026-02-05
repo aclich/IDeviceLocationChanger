@@ -45,3 +45,6 @@
 - [x] Favorite location
     - Pane the map to the selected favorite location when clicked in the list
     - Can save selected location, not only current location
+
+# Debug features
+- [x] Add a dynamic port forwarding debug feature, user can forward frontend, backend 127.0.0.1:port to another network interface addr:port for remote debug. like ngrok, but simpler.

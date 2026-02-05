@@ -14,6 +14,17 @@ export function DebugPage() {
   const [backendPort, setBackendPort] = useState('8765');
   const [isCustomBackend, setIsCustomBackend] = useState(false);
 
+  // Port forwarding state
+  const [interfaces, setInterfaces] = useState([]);
+  const [forwards, setForwards] = useState([]);
+  const [newForward, setNewForward] = useState({
+    listenIp: '',
+    listenPort: '5173',
+    targetIp: 'localhost',
+    targetPort: '5173',
+  });
+  const [forwardLoading, setForwardLoading] = useState(false);
+
   // Check backend connection and load saved backend address
   useEffect(() => {
     setIsConnected(!!window.backend);
@@ -32,6 +43,30 @@ export function DebugPage() {
         console.error('Failed to parse backend URL:', e);
       }
     }
+
+    // Load network interfaces and active forwards
+    const loadPortForwardData = async () => {
+      if (!window.backend) return;
+      try {
+        const [ifacesRes, forwardsRes] = await Promise.all([
+          window.backend.send('listInterfaces', {}),
+          window.backend.send('listPortForwards', {}),
+        ]);
+        if (ifacesRes.result?.interfaces) {
+          setInterfaces(ifacesRes.result.interfaces);
+          // Set default listenIp if available
+          if (ifacesRes.result.interfaces.length > 0 && !newForward.listenIp) {
+            setNewForward(prev => ({ ...prev, listenIp: ifacesRes.result.interfaces[0].ip }));
+          }
+        }
+        if (forwardsRes.result?.forwards) {
+          setForwards(forwardsRes.result.forwards);
+        }
+      } catch (e) {
+        console.error('Failed to load port forward data:', e);
+      }
+    };
+    loadPortForwardData();
   }, []);
 
   // Auto-scroll outputs and logs
@@ -171,6 +206,72 @@ export function DebugPage() {
     }
   }, [addLog]);
 
+  // Port forwarding handlers
+  const refreshForwards = useCallback(async () => {
+    if (!window.backend) return;
+    try {
+      const res = await window.backend.send('listPortForwards', {});
+      if (res.result?.forwards) {
+        setForwards(res.result.forwards);
+      }
+    } catch (e) {
+      console.error('Failed to refresh forwards:', e);
+    }
+  }, []);
+
+  const handleStartForward = useCallback(async () => {
+    if (!window.backend) {
+      addLog('error', 'Backend not connected');
+      return;
+    }
+
+    if (!newForward.listenIp) {
+      addLog('error', 'Please select a network interface');
+      return;
+    }
+
+    setForwardLoading(true);
+    try {
+      const res = await window.backend.send('startPortForward', {
+        listenIp: newForward.listenIp,
+        listenPort: parseInt(newForward.listenPort, 10),
+        targetIp: newForward.targetIp,
+        targetPort: parseInt(newForward.targetPort, 10),
+      });
+
+      if (res.result?.success) {
+        addLog('info', `Started forward: ${newForward.listenIp}:${newForward.listenPort} → ${newForward.targetIp}:${newForward.targetPort}`);
+        await refreshForwards();
+      } else {
+        addLog('error', `Failed to start forward: ${res.result?.error || 'Unknown error'}`);
+      }
+    } catch (e) {
+      addLog('error', `Failed to start forward: ${e.message}`);
+    } finally {
+      setForwardLoading(false);
+    }
+  }, [newForward, addLog, refreshForwards]);
+
+  const handleStopForward = useCallback(async (forward) => {
+    if (!window.backend) return;
+
+    try {
+      const res = await window.backend.send('stopPortForward', {
+        listenIp: forward.listenIp,
+        listenPort: forward.listenPort,
+      });
+
+      if (res.result?.success) {
+        addLog('info', `Stopped forward: ${forward.listenIp}:${forward.listenPort}`);
+        await refreshForwards();
+      } else {
+        addLog('error', `Failed to stop forward: ${res.result?.error || 'Unknown error'}`);
+      }
+    } catch (e) {
+      addLog('error', `Failed to stop forward: ${e.message}`);
+    }
+  }, [addLog, refreshForwards]);
+
   const presetCommands = [
     { label: 'List Devices', cmd: '{"method": "listDevices", "params": {}}' },
     { label: 'Select Device', cmd: '{"method": "selectDevice", "params": {"deviceId": "DEVICE_ID_HERE"}}' },
@@ -215,6 +316,74 @@ export function DebugPage() {
           <button className="backend-reset-btn" onClick={handleBackendReset}>
             Reset
           </button>
+        )}
+      </div>
+
+      {/* Port Forwarding Section */}
+      <div className="debug-port-forward">
+        <div className="section-header">
+          <label>Port Forwarding</label>
+        </div>
+        <div className="port-forward-form">
+          <select
+            className="interface-select"
+            value={newForward.listenIp}
+            onChange={(e) => setNewForward(prev => ({ ...prev, listenIp: e.target.value }))}
+          >
+            <option value="">Select Interface</option>
+            {interfaces.map((iface, i) => (
+              <option key={i} value={iface.ip}>
+                {iface.name} ({iface.ip})
+              </option>
+            ))}
+          </select>
+          <input
+            type="text"
+            className="port-input"
+            value={newForward.listenPort}
+            onChange={(e) => setNewForward(prev => ({ ...prev, listenPort: e.target.value }))}
+            placeholder="Listen Port"
+          />
+          <span className="forward-arrow">→</span>
+          <input
+            type="text"
+            className="target-input"
+            value={newForward.targetIp}
+            onChange={(e) => setNewForward(prev => ({ ...prev, targetIp: e.target.value }))}
+            placeholder="Target IP"
+          />
+          <input
+            type="text"
+            className="port-input"
+            value={newForward.targetPort}
+            onChange={(e) => setNewForward(prev => ({ ...prev, targetPort: e.target.value }))}
+            placeholder="Target Port"
+          />
+          <button
+            className="forward-start-btn"
+            onClick={handleStartForward}
+            disabled={forwardLoading || !newForward.listenIp}
+          >
+            {forwardLoading ? 'Starting...' : 'Start'}
+          </button>
+        </div>
+        {forwards.length > 0 && (
+          <div className="active-forwards">
+            <label>Active Forwards:</label>
+            {forwards.map((f, i) => (
+              <div key={i} className="forward-item">
+                <span className="forward-info">
+                  {f.listenIp}:{f.listenPort} → {f.targetIp}:{f.targetPort}
+                </span>
+                <button
+                  className="forward-stop-btn"
+                  onClick={() => handleStopForward(f)}
+                >
+                  Stop
+                </button>
+              </div>
+            ))}
+          </div>
         )}
       </div>
 

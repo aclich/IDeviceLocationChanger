@@ -378,7 +378,7 @@ let initPromise = null;
  * Get the backend URL from various sources
  * Handles async getBackendUrl from Electron preload
  *
- * Priority: localStorage > Electron config > env variable > default
+ * Priority: localStorage > Electron config > env variable > auto-detect > default
  *
  * @returns {Promise<string>} - The backend URL
  */
@@ -408,6 +408,18 @@ async function resolveBackendUrl() {
   // Check Vite env variable
   if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_BACKEND_URL) {
     return import.meta.env.VITE_BACKEND_URL;
+  }
+
+  // Auto-detect: If accessed from non-localhost, use same host for backend
+  // This enables port forwarding scenarios where both frontend and backend
+  // are forwarded to the same network interface
+  if (typeof window !== 'undefined' && window.location) {
+    const hostname = window.location.hostname;
+    if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
+      const autoUrl = `http://${hostname}:8765`;
+      logger.info(`Auto-detected non-localhost access, using backend: ${autoUrl}`);
+      return autoUrl;
+    }
   }
 
   // Default

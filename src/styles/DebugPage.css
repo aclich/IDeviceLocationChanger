@@ -126,6 +126,146 @@
   color: #fff;
 }
 
+/* Port Forwarding Section */
+.debug-port-forward {
+  padding: 10px 12px;
+  background: #0d0d1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+}
+
+.debug-port-forward .section-header {
+  margin-bottom: 10px;
+}
+
+.port-forward-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.interface-select {
+  min-width: 180px;
+  padding: 6px 10px;
+  background: #1a1a2e;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.interface-select:focus {
+  outline: none;
+  border-color: #60a5fa;
+}
+
+.port-input {
+  width: 80px;
+  padding: 6px 10px;
+  background: #1a1a2e;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 13px;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  text-align: center;
+}
+
+.target-input {
+  width: 120px;
+  padding: 6px 10px;
+  background: #1a1a2e;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 13px;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+}
+
+.port-input:focus,
+.target-input:focus {
+  outline: none;
+  border-color: #60a5fa;
+}
+
+.forward-arrow {
+  color: #666;
+  font-size: 14px;
+  padding: 0 4px;
+}
+
+.forward-start-btn {
+  padding: 6px 14px;
+  background: #22c55e;
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.forward-start-btn:hover:not(:disabled) {
+  background: #16a34a;
+}
+
+.forward-start-btn:disabled {
+  background: #555;
+  cursor: not-allowed;
+}
+
+.active-forwards {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #333;
+}
+
+.active-forwards > label {
+  display: block;
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.forward-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  background: #151525;
+  border-radius: 4px;
+  margin-bottom: 6px;
+}
+
+.forward-item:last-child {
+  margin-bottom: 0;
+}
+
+.forward-info {
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-size: 12px;
+  color: #4ade80;
+}
+
+.forward-stop-btn {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid #f87171;
+  border-radius: 4px;
+  color: #f87171;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.forward-stop-btn:hover {
+  background: #5f1e1e;
+}
+
 /* Preset Commands */
 .debug-presets {
   display: flex;
