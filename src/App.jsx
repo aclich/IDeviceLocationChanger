@@ -217,84 +217,86 @@ function App() {
         </div>
       )}
 
-      {showDebug ? (
+      {/* Debug page - hidden when not active but stays mounted */}
+      <div style={{ display: showDebug ? 'contents' : 'none' }}>
         <DebugPage />
-      ) : (
-        <>
-          <div className="main-content">
-            {/* Left side - Map */}
-            <div className="map-container">
-              <MapWidget
-                location={location}
-                pendingLocation={pendingLocation}
-                cruiseTarget={cruiseTarget}
-                onLocationSelect={handleMapClick}
-                flyTo={flyToLocation}
-              />
-            </div>
+      </div>
 
-            {/* Right side - Controls */}
-            <div className="sidebar">
-              <DevicePanel
-                devices={devices}
-                selectedDevice={selectedDevice}
-                onSelectDevice={selectDevice}
-                onRefresh={listDevices}
-                isLoading={isLoading}
-                tunnelStatus={tunnelStatus}
-                onStartTunnel={startTunnel}
-                onStopTunnel={stopTunnel}
-              />
-
-              <ControlPanel
-                location={location}
-                pendingLocation={pendingLocation}
-                selectedDevice={selectedDevice}
-                isMoving={isMoving}
-                speed={speed}
-                cruiseTarget={cruiseTarget}
-                cruiseStatus={cruiseStatus}
-                onSetLocation={handleSetLocation}
-                onClearLocation={handleClearLocation}
-                onStartCruise={handleStartCruise}
-                onStopCruise={handleStopCruise}
-                onPauseCruise={handlePauseCruise}
-                onResumeCruise={handleResumeCruise}
-                onJoystickMove={updateJoystick}
-                onJoystickRelease={releaseJoystick}
-                onSpeedChange={handleSpeedChange}
-                onDirectInput={handleDirectInput}
-                favorites={favorites}
-                favoritesLoading={favoritesLoading}
-                onFavoriteSelect={handleFavoriteSelect}
-                onSaveFavorite={handleSaveFavorite}
-                onManageFavorites={() => setShowFavoritesManager(true)}
-                canSaveLocation={!!(pendingLocation || location)}
-                hasSelectedLocation={!!pendingLocation}
-              />
-            </div>
+      {/* Simulator view - hidden when debug is active but stays mounted to preserve map state */}
+      <div style={{ display: showDebug ? 'none' : 'contents' }}>
+        <div className="main-content">
+          {/* Left side - Map */}
+          <div className="map-container">
+            <MapWidget
+              location={location}
+              pendingLocation={pendingLocation}
+              cruiseTarget={cruiseTarget}
+              onLocationSelect={handleMapClick}
+              flyTo={flyToLocation}
+            />
           </div>
 
-          {/* Status bar */}
-          <div className="status-bar">
+          {/* Right side - Controls */}
+          <div className="sidebar">
+            <DevicePanel
+              devices={devices}
+              selectedDevice={selectedDevice}
+              onSelectDevice={selectDevice}
+              onRefresh={listDevices}
+              isLoading={isLoading}
+              tunnelStatus={tunnelStatus}
+              onStartTunnel={startTunnel}
+              onStopTunnel={stopTunnel}
+            />
+
+            <ControlPanel
+              location={location}
+              pendingLocation={pendingLocation}
+              selectedDevice={selectedDevice}
+              isMoving={isMoving}
+              speed={speed}
+              cruiseTarget={cruiseTarget}
+              cruiseStatus={cruiseStatus}
+              onSetLocation={handleSetLocation}
+              onClearLocation={handleClearLocation}
+              onStartCruise={handleStartCruise}
+              onStopCruise={handleStopCruise}
+              onPauseCruise={handlePauseCruise}
+              onResumeCruise={handleResumeCruise}
+              onJoystickMove={updateJoystick}
+              onJoystickRelease={releaseJoystick}
+              onSpeedChange={handleSpeedChange}
+              onDirectInput={handleDirectInput}
+              favorites={favorites}
+              favoritesLoading={favoritesLoading}
+              onFavoriteSelect={handleFavoriteSelect}
+              onSaveFavorite={handleSaveFavorite}
+              onManageFavorites={() => setShowFavoritesManager(true)}
+              canSaveLocation={!!(pendingLocation || location)}
+              hasSelectedLocation={!!pendingLocation}
+            />
+          </div>
+        </div>
+
+        {/* Status bar */}
+        <div className="status-bar">
+          <span>
+            {selectedDevice
+              ? `Selected: ${selectedDevice.name}`
+              : 'No device selected'}
+          </span>
+          {location && (
             <span>
-              {selectedDevice
-                ? `Selected: ${selectedDevice.name}`
-                : 'No device selected'}
+              Location: {location.latitude.toFixed(6)}, {location.longitude.toFixed(6)}
             </span>
-            {location && (
-              <span>
-                Location: {location.latitude.toFixed(6)}, {location.longitude.toFixed(6)}
-              </span>
-            )}
-            {isCruising && cruiseInfo && (
-              <span>
-                {cruiseInfo.isPaused ? 'Paused' : 'Cruising'}: {cruiseInfo.distance} remaining • ETA {cruiseInfo.eta} • {speed.toFixed(1)} km/h
-              </span>
-            )}
-          </div>
-        </>
-      )}
+          )}
+          {isCruising && cruiseInfo && (
+            <span>
+              {cruiseInfo.isPaused ? 'Paused' : 'Cruising'}: {cruiseInfo.distance} remaining • ETA {cruiseInfo.eta} • {speed.toFixed(1)} km/h
+            </span>
+          )}
+        </div>
+      </div>
 
       {/* Favorites Manager Modal */}
       <FavoritesManager

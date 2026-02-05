@@ -35,7 +35,8 @@
     - Fixed: Added https://nominatim.openstreetmap.org to CSP connect-src in index.html
 - [x] Browser mode, Cruise mode will stop working after tab is inactive for a while
     - see CruiseModeRefactor.md for more details
-- [ ] Swtich to debug tab and back to Simumlator tap, the map will lost the current location centering and the icons
+- [x] Swtich to debug tab and back to Simumlator tap, the map will lost the current location centering and the icons
+    - Fixed: Use CSS display to hide/show tabs instead of conditional rendering, so map instance stays mounted
 
 # UI Improvements
 - [x] Make latitude/longitude text not split line when the number of digits change longer
