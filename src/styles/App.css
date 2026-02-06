@@ -1035,3 +1035,224 @@ body {
   margin-top: 8px;
   font-size: 12px;
 }
+
+/* =========================================================================
+   Mobile Responsive Styles
+   ========================================================================= */
+
+@media (max-width: 767px) {
+  /* Layout - stack vertically */
+  .main-content {
+    flex-direction: column;
+  }
+
+  .map-container {
+    flex: 1;
+    min-height: 40vh;
+    padding: 8px;
+  }
+
+  .sidebar {
+    width: 100%;
+    max-height: 50vh;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    overflow-y: auto;
+  }
+
+  /* Sidebar collapse toggle */
+  .sidebar-toggle {
+    display: block;
+    width: 100%;
+    padding: 12px;
+    background: var(--bg-tertiary);
+    border: none;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    text-align: center;
+  }
+
+  .sidebar.collapsed > *:not(.sidebar-toggle) {
+    display: none;
+  }
+
+  /* Touch targets - minimum 44px (Apple guideline) */
+  .btn {
+    padding: 14px 16px;
+    min-height: 48px;
+    font-size: 15px;
+  }
+
+  .device-item {
+    padding: 14px 12px;
+    min-height: 56px;
+  }
+
+  .mode-btn {
+    padding: 12px 8px;
+    min-height: 44px;
+  }
+
+  /* Map controls - larger for touch */
+  .map-center-btn,
+  .map-gps-btn,
+  .map-follow-btn {
+    width: 48px;
+    height: 48px;
+    font-size: 22px;
+  }
+
+  .map-gps-btn {
+    bottom: 78px;
+  }
+
+  /* Forms - stack vertically */
+  .coord-input-row {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .coord-input-row .btn {
+    width: 100%;
+  }
+
+  .direct-buttons {
+    flex-direction: column;
+  }
+
+  .cruise-buttons {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  /* Prevent iOS zoom on input focus (must be 16px+) */
+  .coord-input {
+    font-size: 16px;
+  }
+
+  /* Panel adjustments */
+  .device-panel,
+  .control-panel {
+    padding: 12px;
+  }
+
+  .panel-header {
+    margin-bottom: 10px;
+  }
+
+  /* Location info - more compact */
+  .location-info {
+    padding: 10px;
+    margin-bottom: 12px;
+  }
+
+  /* Joystick container - ensure it fits */
+  .joystick-container {
+    padding: 12px 0;
+  }
+
+  /* Modal - full width bottom sheet style */
+  .modal-overlay {
+    align-items: flex-end;
+  }
+
+  .modal-content {
+    width: 100%;
+    max-width: 100%;
+    max-height: 85vh;
+    border-radius: 16px 16px 0 0;
+  }
+
+  .modal-header {
+    padding: 14px 16px;
+  }
+
+  .modal-body {
+    padding: 14px 16px;
+  }
+
+  .modal-footer {
+    padding: 12px 16px;
+  }
+
+  /* Favorites dropdown - full width items */
+  .favorites-dropdown-menu {
+    max-height: 250px;
+  }
+
+  .favorites-action-btn {
+    padding: 10px;
+    min-height: 44px;
+  }
+
+  .favorites-item {
+    padding: 12px;
+    min-height: 48px;
+  }
+
+  /* Import section in modal */
+  .import-row {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .import-row .btn {
+    width: 100%;
+  }
+
+  /* Status bar - compact for mobile */
+  .status-bar {
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 12px;
+    font-size: 11px;
+  }
+
+  .status-bar span {
+    text-align: center;
+  }
+
+  /* Titlebar - adjust for mobile */
+  .titlebar {
+    height: 44px;
+  }
+
+  .titlebar-tab {
+    padding: 8px 14px;
+    font-size: 14px;
+  }
+
+  /* Connection status - reposition for mobile */
+  .connection-status {
+    position: static;
+    margin-left: auto;
+    margin-right: 8px;
+  }
+
+  /* Error banner - wrap text */
+  .error-banner {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  /* Settings section */
+  .custom-speed-row {
+    flex-wrap: wrap;
+  }
+
+  /* Cruise controls */
+  .cruise-eta {
+    padding: 10px;
+    margin-bottom: 10px;
+  }
+}
+
+/* Hide sidebar toggle on desktop */
+@media (min-width: 768px) {
+  .sidebar-toggle {
+    display: none;
+  }
+}

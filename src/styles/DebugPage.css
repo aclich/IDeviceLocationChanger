@@ -569,3 +569,109 @@
 .debug-log::-webkit-scrollbar-thumb:hover {
   background: #444;
 }
+
+/* =========================================================================
+   Mobile Responsive Styles
+   ========================================================================= */
+
+@media (max-width: 767px) {
+  .debug-page {
+    padding: 12px;
+    gap: 10px;
+  }
+
+  .debug-header h2 {
+    font-size: 16px;
+  }
+
+  /* Backend config - stack on mobile */
+  .debug-backend-config {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .backend-host-input {
+    flex: 1 1 100%;
+    min-width: auto;
+  }
+
+  .backend-port-separator {
+    display: none;
+  }
+
+  .backend-port-input {
+    width: 100%;
+  }
+
+  .backend-connect-btn,
+  .backend-reset-btn {
+    flex: 1;
+    min-height: 44px;
+  }
+
+  /* Port forwarding form - stack vertically */
+  .port-forward-form {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .interface-select {
+    width: 100%;
+  }
+
+  .forward-start-btn {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  /* Horizontal scroll for presets on mobile */
+  .debug-presets {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 8px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .preset-btn {
+    flex-shrink: 0;
+    min-height: 44px;
+    padding: 10px 14px;
+  }
+
+  /* Input section */
+  .debug-input {
+    min-height: 100px;
+    font-size: 14px;
+  }
+
+  .send-btn {
+    width: 100%;
+    min-height: 48px;
+  }
+
+  /* Reduce heights for output/log sections */
+  .debug-output-section {
+    min-height: 120px;
+    flex: 1;
+  }
+
+  .debug-log-section {
+    height: 150px;
+  }
+
+  /* Forward items - stack on narrow screens */
+  .forward-item {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .forward-info {
+    flex: 1 1 100%;
+    word-break: break-all;
+  }
+
+  .forward-stop-btn {
+    min-height: 36px;
+    padding: 8px 12px;
+  }
+}

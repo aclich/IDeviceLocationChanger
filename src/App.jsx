@@ -83,6 +83,7 @@ function App() {
   const [showDebug, setShowDebug] = useState(false);
   const [showFavoritesManager, setShowFavoritesManager] = useState(false);
   const [flyToLocation, setFlyToLocation] = useState(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const handleMapClick = useCallback((lat, lng) => {
     setPendingLocation({ latitude: lat, longitude: lng });
@@ -237,7 +238,13 @@ function App() {
           </div>
 
           {/* Right side - Controls */}
-          <div className="sidebar">
+          <div className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
+            <button
+              className="sidebar-toggle"
+              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            >
+              {sidebarCollapsed ? '▲ Expand Controls' : '▼ Collapse Controls'}
+            </button>
             <DevicePanel
               devices={devices}
               selectedDevice={selectedDevice}
