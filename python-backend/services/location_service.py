@@ -92,6 +92,10 @@ class LocationService:
         if not device:
             return {"success": False, "error": "No device provided"}
 
+        # Normalize coordinates to valid GPS range
+        latitude = max(-90.0, min(90.0, latitude))
+        longitude = ((longitude + 180.0) % 360.0) - 180.0
+
         try:
             if device.type == DeviceType.SIMULATOR:
                 return self._set_simulator_location(device, latitude, longitude)
