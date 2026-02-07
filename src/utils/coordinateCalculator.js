@@ -6,6 +6,21 @@
 const EARTH_RADIUS_KM = 6371.0;
 
 /**
+ * Normalize latitude and longitude to valid ranges.
+ * Latitude: clamp to [-90, 90]
+ * Longitude: wrap to [-180, 180]
+ *
+ * @param {number} lat - Latitude in degrees
+ * @param {number} lng - Longitude in degrees
+ * @returns {[number, number]} [normalizedLat, normalizedLng]
+ */
+export function normalizeCoordinates(lat, lng) {
+  const normalizedLat = Math.max(-90, Math.min(90, lat));
+  const normalizedLng = ((lng % 360) + 540) % 360 - 180;
+  return [normalizedLat, normalizedLng];
+}
+
+/**
  * Calculate new position after moving in a direction.
  *
  * @param {number} lat - Starting latitude in degrees
@@ -34,7 +49,9 @@ export function moveLocation(lat, lon, directionDegrees, speedKmh, durationSecon
     Math.cos(angularDistance) - Math.sin(latRad) * Math.sin(newLatRad)
   );
 
-  return [(newLatRad * 180) / Math.PI, (newLonRad * 180) / Math.PI];
+  const rawLat = (newLatRad * 180) / Math.PI;
+  const rawLng = (newLonRad * 180) / Math.PI;
+  return normalizeCoordinates(rawLat, rawLng);
 }
 
 /**
