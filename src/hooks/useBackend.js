@@ -32,6 +32,8 @@ export function useBackend() {
   const [location, setLocation] = useState(null);
   const [tunnelStatus, setTunnelStatus] = useState({ running: false });
   const [cruiseStatus, setCruiseStatus] = useState(null); // { state, location, target, speedKmh, remainingKm }
+  const [routeStatus, setRouteStatus] = useState(null); // Route cruise session state
+  const [routeState, setRouteState] = useState(null); // Route waypoints, segments, loop mode
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(true); // Updated in useEffect after backend init
@@ -121,6 +123,43 @@ export function useBackend() {
         case 'cruiseError':
           setCruiseStatus(null);
           setError(`Cruise error: ${message.data?.error}`);
+          break;
+
+        // Route events
+        case 'routeStarted':
+          setRouteStatus(message.data);
+          break;
+
+        case 'routeUpdate':
+          setRouteStatus(message.data);
+          // Update location from route movement (route delegates to cruise which updates position)
+          if (message.data?.route) {
+            setRouteState(message.data.route);
+          }
+          break;
+
+        case 'routeArrived':
+          setRouteStatus(null);
+          setCruiseStatus(null); // Clean up stale cruise state
+          break;
+
+        case 'routeSegmentComplete':
+          setRouteStatus(message.data);
+          break;
+
+        case 'routeLoopComplete':
+          setRouteStatus(message.data);
+          break;
+
+        case 'routeWaypointAdded':
+          if (message.data?.route) {
+            setRouteState(message.data.route);
+          }
+          break;
+
+        case 'routeError':
+          setRouteStatus(null);
+          setError(`Route error: ${message.data?.error}`);
           break;
 
         default:
@@ -406,6 +445,128 @@ export function useBackend() {
   }, [selectedDevice]);
 
   // =========================================================================
+  // Route Cruise Operations
+  // =========================================================================
+
+  const addRouteWaypoint = useCallback(async (lat, lng) => {
+    if (!selectedDevice) return { error: { message: 'No device selected' } };
+    const response = await sendRequest('addRouteWaypoint', {
+      deviceId: selectedDevice.id, lat, lng,
+    });
+    if (response.result?.route) {
+      setRouteState(response.result.route);
+    }
+    return response;
+  }, [selectedDevice]);
+
+  const undoRouteWaypoint = useCallback(async () => {
+    if (!selectedDevice) return { error: { message: 'No device selected' } };
+    const response = await sendRequest('undoRouteWaypoint', {
+      deviceId: selectedDevice.id,
+    });
+    if (response.result?.route) {
+      setRouteState(response.result.route);
+    }
+    return response;
+  }, [selectedDevice]);
+
+  const startRouteCruise = useCallback(async (speedKmh = 5) => {
+    if (!selectedDevice) return { error: { message: 'No device selected' } };
+    setError(null);
+    const response = await sendRequest('startRouteCruise', {
+      deviceId: selectedDevice.id, speedKmh,
+    });
+    if (response.result?.session) {
+      setRouteStatus(response.result.session);
+    } else if (response.error) {
+      setError(response.error.message);
+    } else if (response.result && !response.result.success) {
+      setError(response.result.error);
+    }
+    return response;
+  }, [selectedDevice]);
+
+  const pauseRouteCruise = useCallback(async () => {
+    if (!selectedDevice) return { error: { message: 'No device selected' } };
+    const response = await sendRequest('pauseRouteCruise', {
+      deviceId: selectedDevice.id,
+    });
+    if (response.result?.session) setRouteStatus(response.result.session);
+    return response;
+  }, [selectedDevice]);
+
+  const resumeRouteCruise = useCallback(async () => {
+    if (!selectedDevice) return { error: { message: 'No device selected' } };
+    const response = await sendRequest('resumeRouteCruise', {
+      deviceId: selectedDevice.id,
+    });
+    if (response.result?.session) setRouteStatus(response.result.session);
+    return response;
+  }, [selectedDevice]);
+
+  const rerouteRouteCruise = useCallback(async (lat, lng) => {
+    if (!selectedDevice) return { error: { message: 'No device selected' } };
+    const response = await sendRequest('rerouteRouteCruise', {
+      deviceId: selectedDevice.id, lat, lng,
+    });
+    if (response.result?.session) setRouteStatus(response.result.session);
+    return response;
+  }, [selectedDevice]);
+
+  const stopRouteCruise = useCallback(async () => {
+    if (!selectedDevice) return { error: { message: 'No device selected' } };
+    const response = await sendRequest('stopRouteCruise', {
+      deviceId: selectedDevice.id,
+    });
+    if (response.result?.success) setRouteStatus(null);
+    return response;
+  }, [selectedDevice]);
+
+  const setRouteCruiseSpeed = useCallback(async (speedKmh) => {
+    if (!selectedDevice) return { error: { message: 'No device selected' } };
+    return await sendRequest('setRouteCruiseSpeed', {
+      deviceId: selectedDevice.id, speedKmh,
+    });
+  }, [selectedDevice]);
+
+  const clearRoute = useCallback(async () => {
+    if (!selectedDevice) return { error: { message: 'No device selected' } };
+    const response = await sendRequest('clearRoute', {
+      deviceId: selectedDevice.id,
+    });
+    if (response.result?.success) {
+      setRouteState(null);
+      setRouteStatus(null);
+    }
+    return response;
+  }, [selectedDevice]);
+
+  const setRouteLoopMode = useCallback(async (enabled) => {
+    if (!selectedDevice) return { error: { message: 'No device selected' } };
+    const response = await sendRequest('setRouteLoopMode', {
+      deviceId: selectedDevice.id, enabled,
+    });
+    if (response.result?.route) {
+      setRouteState(response.result.route);
+    }
+    return response;
+  }, [selectedDevice]);
+
+  const getRouteStatus = useCallback(async () => {
+    if (!selectedDevice) return { error: { message: 'No device selected' } };
+    const response = await sendRequest('getRouteStatus', {
+      deviceId: selectedDevice.id,
+    });
+    if (response.result) {
+      if (response.result.route) setRouteState(response.result.route);
+      if (response.result.cruiseState) setRouteStatus(
+        response.result.cruiseState.state !== 'idle' ? response.result.cruiseState : null
+      );
+    }
+    return response;
+  }, [selectedDevice]);
+
+  // =========================================================================
   // Return API
   // =========================================================================
 
@@ -442,6 +603,23 @@ export function useBackend() {
     resumeCruise,
     setCruiseSpeed,
     getCruiseStatus,
+
+    // Route state
+    routeStatus,
+    routeState,
+
+    // Route actions
+    addRouteWaypoint,
+    undoRouteWaypoint,
+    startRouteCruise,
+    pauseRouteCruise,
+    resumeRouteCruise,
+    rerouteRouteCruise,
+    stopRouteCruise,
+    setRouteCruiseSpeed,
+    clearRoute,
+    setRouteLoopMode,
+    getRouteStatus,
 
     // Utilities
     clearError: () => setError(null),

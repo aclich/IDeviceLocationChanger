@@ -1,8 +1,8 @@
 """Tests for cruise mode functionality."""
 
-import asyncio
+import time
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 from services.coordinate_utils import move_location, bearing_to, distance_between
 from services.cruise_service import CruiseService, CruiseState
@@ -85,14 +85,13 @@ class TestCruiseService:
     def cruise_service(self):
         """Create a CruiseService with mocked callbacks."""
         service = CruiseService()
-        service._set_location = AsyncMock(return_value={"success": True})
+        service._set_location = MagicMock(return_value={"success": True})
         service._emit_event = MagicMock()
         return service
 
-    @pytest.mark.asyncio
-    async def test_start_cruise_success(self, cruise_service):
+    def test_start_cruise_success(self, cruise_service):
         """Test starting cruise mode."""
-        result = await cruise_service.start_cruise(
+        result = cruise_service.start_cruise(
             device_id="test-device",
             start_lat=25.0,
             start_lon=121.5,
@@ -107,12 +106,11 @@ class TestCruiseService:
         assert cruise_service.get_cruise_status("test-device")["state"] == "running"
 
         # Clean up
-        await cruise_service.stop_cruise("test-device")
+        cruise_service.stop_cruise("test-device")
 
-    @pytest.mark.asyncio
-    async def test_start_cruise_already_at_target(self, cruise_service):
+    def test_start_cruise_already_at_target(self, cruise_service):
         """Test starting cruise when already at target location."""
-        result = await cruise_service.start_cruise(
+        result = cruise_service.start_cruise(
             device_id="test-device",
             start_lat=25.0,
             start_lon=121.5,
@@ -124,11 +122,10 @@ class TestCruiseService:
         assert result["success"] is False
         assert "Already at target" in result["error"]
 
-    @pytest.mark.asyncio
-    async def test_stop_cruise(self, cruise_service):
+    def test_stop_cruise(self, cruise_service):
         """Test stopping cruise mode."""
         # Start cruise first
-        await cruise_service.start_cruise(
+        cruise_service.start_cruise(
             device_id="test-device",
             start_lat=25.0,
             start_lon=121.5,
@@ -138,16 +135,15 @@ class TestCruiseService:
         )
 
         # Stop it
-        result = await cruise_service.stop_cruise("test-device")
+        result = cruise_service.stop_cruise("test-device")
 
         assert result["success"] is True
         assert cruise_service.get_cruise_status("test-device")["state"] == "idle"
 
-    @pytest.mark.asyncio
-    async def test_pause_resume_cruise(self, cruise_service):
+    def test_pause_resume_cruise(self, cruise_service):
         """Test pause and resume functionality."""
         # Start cruise
-        await cruise_service.start_cruise(
+        cruise_service.start_cruise(
             device_id="test-device",
             start_lat=25.0,
             start_lon=121.5,
@@ -157,30 +153,28 @@ class TestCruiseService:
         )
 
         # Pause
-        result = await cruise_service.pause_cruise("test-device")
+        result = cruise_service.pause_cruise("test-device")
         assert result["success"] is True
         assert cruise_service.get_cruise_status("test-device")["state"] == "paused"
 
         # Resume
-        result = await cruise_service.resume_cruise("test-device")
+        result = cruise_service.resume_cruise("test-device")
         assert result["success"] is True
         assert cruise_service.get_cruise_status("test-device")["state"] == "running"
 
         # Clean up
-        await cruise_service.stop_cruise("test-device")
+        cruise_service.stop_cruise("test-device")
 
-    @pytest.mark.asyncio
-    async def test_pause_when_not_running(self, cruise_service):
+    def test_pause_when_not_running(self, cruise_service):
         """Test pausing when not in running state."""
-        result = await cruise_service.pause_cruise("test-device")
+        result = cruise_service.pause_cruise("test-device")
         assert result["success"] is False
         assert "No active cruise" in result["error"]
 
-    @pytest.mark.asyncio
-    async def test_resume_when_not_paused(self, cruise_service):
+    def test_resume_when_not_paused(self, cruise_service):
         """Test resuming when not paused."""
         # Start cruise (running state)
-        await cruise_service.start_cruise(
+        cruise_service.start_cruise(
             device_id="test-device",
             start_lat=25.0,
             start_lon=121.5,
@@ -190,24 +184,22 @@ class TestCruiseService:
         )
 
         # Try to resume (should fail - already running)
-        result = await cruise_service.resume_cruise("test-device")
+        result = cruise_service.resume_cruise("test-device")
         assert result["success"] is False
 
         # Clean up
-        await cruise_service.stop_cruise("test-device")
+        cruise_service.stop_cruise("test-device")
 
     def test_set_cruise_speed(self, cruise_service):
         """Test setting cruise speed."""
         # Need an active cruise first
-        asyncio.get_event_loop().run_until_complete(
-            cruise_service.start_cruise(
-                device_id="test-device",
-                start_lat=25.0,
-                start_lon=121.5,
-                target_lat=25.1,
-                target_lon=121.5,
-                speed_kmh=10.0
-            )
+        cruise_service.start_cruise(
+            device_id="test-device",
+            start_lat=25.0,
+            start_lon=121.5,
+            target_lat=25.1,
+            target_lon=121.5,
+            speed_kmh=10.0
         )
 
         result = cruise_service.set_cruise_speed("test-device", 20.0)
@@ -215,35 +207,29 @@ class TestCruiseService:
         assert result["speedKmh"] == 20.0
 
         # Clean up
-        asyncio.get_event_loop().run_until_complete(
-            cruise_service.stop_cruise("test-device")
-        )
+        cruise_service.stop_cruise("test-device")
 
     def test_set_cruise_speed_clamp(self, cruise_service):
         """Test speed clamping to valid range."""
-        asyncio.get_event_loop().run_until_complete(
-            cruise_service.start_cruise(
-                device_id="test-device",
-                start_lat=25.0,
-                start_lon=121.5,
-                target_lat=25.1,
-                target_lon=121.5,
-                speed_kmh=10.0
-            )
+        cruise_service.start_cruise(
+            device_id="test-device",
+            start_lat=25.0,
+            start_lon=121.5,
+            target_lat=25.1,
+            target_lon=121.5,
+            speed_kmh=10.0
         )
 
-        # Test upper bound
+        # No upper clamp - high speeds pass through
         result = cruise_service.set_cruise_speed("test-device", 100.0)
-        assert result["speedKmh"] == 50.0
+        assert result["speedKmh"] == 100.0
 
-        # Test lower bound
-        result = cruise_service.set_cruise_speed("test-device", 0.5)
-        assert result["speedKmh"] == 1.0
+        # Lower bound: minimum is 0.1 km/h to prevent stall
+        result = cruise_service.set_cruise_speed("test-device", 0.05)
+        assert result["speedKmh"] == 0.1
 
         # Clean up
-        asyncio.get_event_loop().run_until_complete(
-            cruise_service.stop_cruise("test-device")
-        )
+        cruise_service.stop_cruise("test-device")
 
     def test_get_cruise_status_idle(self, cruise_service):
         """Test getting status when no cruise is active."""
@@ -251,10 +237,9 @@ class TestCruiseService:
         assert status["state"] == "idle"
         assert status["deviceId"] == "test-device"
 
-    @pytest.mark.asyncio
-    async def test_cruise_movement_towards_target(self, cruise_service):
+    def test_cruise_movement_towards_target(self, cruise_service):
         """Test that cruise moves towards target."""
-        await cruise_service.start_cruise(
+        cruise_service.start_cruise(
             device_id="test-device",
             start_lat=25.0,
             start_lon=121.5,
@@ -263,22 +248,21 @@ class TestCruiseService:
             speed_kmh=36.0  # 10 m/s
         )
 
-        # Let it run for a short time
-        await asyncio.sleep(0.3)
+        # Let the background thread run for a short time
+        time.sleep(0.5)
 
         status = cruise_service.get_cruise_status("test-device")
         # Should have moved north (latitude increased)
         assert status["location"]["latitude"] > 25.0
 
         # Clean up
-        await cruise_service.stop_cruise("test-device")
+        cruise_service.stop_cruise("test-device")
 
-    @pytest.mark.asyncio
-    async def test_cruise_arrival(self, cruise_service):
+    def test_cruise_arrival(self, cruise_service):
         """Test cruise arrival at close target."""
         # Use a target about 10 meters north (just above threshold)
         # At 36 km/h = 10 m/s, should arrive in ~1 second
-        await cruise_service.start_cruise(
+        cruise_service.start_cruise(
             device_id="test-device",
             start_lat=25.0,
             start_lon=121.5,
@@ -288,7 +272,7 @@ class TestCruiseService:
         )
 
         # Wait for arrival (should take ~1-2 seconds)
-        await asyncio.sleep(2.0)
+        time.sleep(2.5)
 
         # Should have arrived and session removed
         status = cruise_service.get_cruise_status("test-device")
@@ -299,17 +283,16 @@ class TestCruiseService:
         arrival_events = [c for c in calls if c[0][0].get("event") == "cruiseArrived"]
         assert len(arrival_events) > 0
 
-    @pytest.mark.asyncio
-    async def test_stop_all(self, cruise_service):
+    def test_stop_all(self, cruise_service):
         """Test stopping all cruise sessions."""
         # Start multiple cruises
-        await cruise_service.start_cruise(
+        cruise_service.start_cruise(
             device_id="device-1",
             start_lat=25.0, start_lon=121.5,
             target_lat=25.1, target_lon=121.5,
             speed_kmh=10.0
         )
-        await cruise_service.start_cruise(
+        cruise_service.start_cruise(
             device_id="device-2",
             start_lat=26.0, start_lon=121.5,
             target_lat=26.1, target_lon=121.5,
@@ -317,16 +300,15 @@ class TestCruiseService:
         )
 
         # Stop all
-        await cruise_service.stop_all()
+        cruise_service.stop_all()
 
         # Both should be idle
         assert cruise_service.get_cruise_status("device-1")["state"] == "idle"
         assert cruise_service.get_cruise_status("device-2")["state"] == "idle"
 
-    @pytest.mark.asyncio
-    async def test_event_emission(self, cruise_service):
+    def test_event_emission(self, cruise_service):
         """Test that events are emitted correctly."""
-        await cruise_service.start_cruise(
+        cruise_service.start_cruise(
             device_id="test-device",
             start_lat=25.0, start_lon=121.5,
             target_lat=25.1, target_lon=121.5,
@@ -338,15 +320,15 @@ class TestCruiseService:
         started_events = [c for c in calls if c[0][0].get("event") == "cruiseStarted"]
         assert len(started_events) == 1
 
-        # Wait for update events
-        await asyncio.sleep(0.3)
+        # Wait for update events from the background thread
+        time.sleep(0.5)
 
         calls = cruise_service._emit_event.call_args_list
         update_events = [c for c in calls if c[0][0].get("event") == "cruiseUpdate"]
         assert len(update_events) > 0
 
         # Stop and check stopped event
-        await cruise_service.stop_cruise("test-device")
+        cruise_service.stop_cruise("test-device")
 
         calls = cruise_service._emit_event.call_args_list
         stopped_events = [c for c in calls if c[0][0].get("event") == "cruiseStopped"]
