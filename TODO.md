@@ -27,6 +27,7 @@
 - [x] #8 multi-device support
     - Backend remove selected device logic.
     - let frontend handle device selection, and send device id to backend when setting location eachtime.
+- [ ] #9 Save route
 
 # Bugs
 - [x] Cruise mode not cleaning target icon on map when reaching destination
@@ -37,6 +38,11 @@
     - see CruiseModeRefactor.md for more details
 - [x] Swtich to debug tab and back to Simumlator tap, the map will lost the current location centering and the icons
     - Fixed: Use CSS display to hide/show tabs instead of conditional rendering, so map instance stays mounted
+- [ ] Location refresh continues after tunnel stop
+    - When stopTunnel is called, LocationService's refresh task continues running
+    - main.py _stop_tunnel() only calls tunnel.stop_tunnel() but not location.close_connection()
+    - The refresh task keeps trying to send location updates every 3 seconds even though tunnel is gone
+    - Fix: Call location.close_connection(udid) when stopping tunnel
 
 # UI Improvements
 - [x] Make latitude/longitude text not split line when the number of digits change longer
@@ -45,6 +51,13 @@
 - [x] Favorite location
     - Pane the map to the selected favorite location when clicked in the list
     - Can save selected location, not only current location
+- [ ] restore existing device location setting from backend when frontend refreshed
+    - when frontend start, if the selected device has existing location setting in backend (refreshing), load and set the location on map
+- [ ] Simplify tunnel management UX
+    - Remove separate "Start Tunnel" button
+    - Auto-start tunnel when device is selected (if device requires tunnel for iOS 17+)
+    - Add "X" button on connected device label to stop tunnel/disconnect
+    - User only needs to select device - tunnel management happens automatically
 
 # Debug features
 - [x] Add a dynamic port forwarding debug feature, user can forward frontend, backend 127.0.0.1:port to another network interface addr:port for remote debug. like ngrok, but simpler.
