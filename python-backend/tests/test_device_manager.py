@@ -62,7 +62,7 @@ class TestSimulatorDiscovery:
     """Tests for simulator discovery."""
 
     @patch("services.device_manager.subprocess.run")
-    async def test_discover_simulators_success(self, mock_run):
+    def test_discover_simulators_success(self, mock_run):
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=json.dumps({
@@ -91,7 +91,7 @@ class TestSimulatorDiscovery:
         )
 
         dm = DeviceManager()
-        devices = await dm.list_devices()
+        devices = dm.list_devices()
 
         # Should only return booted iOS simulators
         simulators = [d for d in devices if d.type == DeviceType.SIMULATOR]
@@ -101,7 +101,7 @@ class TestSimulatorDiscovery:
         assert simulators[0].state == DeviceState.CONNECTED
 
     @patch("services.device_manager.subprocess.run")
-    async def test_discover_simulators_no_booted(self, mock_run):
+    def test_discover_simulators_no_booted(self, mock_run):
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=json.dumps({
@@ -118,27 +118,27 @@ class TestSimulatorDiscovery:
         )
 
         dm = DeviceManager()
-        devices = await dm.list_devices()
+        devices = dm.list_devices()
 
         simulators = [d for d in devices if d.type == DeviceType.SIMULATOR]
         assert len(simulators) == 0
 
     @patch("services.device_manager.subprocess.run")
-    async def test_discover_simulators_xcrun_failure(self, mock_run):
+    def test_discover_simulators_xcrun_failure(self, mock_run):
         mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error")
 
         dm = DeviceManager()
-        devices = await dm.list_devices()
+        devices = dm.list_devices()
 
         simulators = [d for d in devices if d.type == DeviceType.SIMULATOR]
         assert len(simulators) == 0
 
     @patch("services.device_manager.subprocess.run")
-    async def test_discover_simulators_exception(self, mock_run):
+    def test_discover_simulators_exception(self, mock_run):
         mock_run.side_effect = Exception("xcrun not found")
 
         dm = DeviceManager()
-        devices = await dm.list_devices()
+        devices = dm.list_devices()
 
         # Should handle exception gracefully
         simulators = [d for d in devices if d.type == DeviceType.SIMULATOR]
@@ -151,7 +151,7 @@ class TestPhysicalDeviceDiscovery:
     @patch.object(DeviceManager, "_discover_with_pymobiledevice3_native")
     @patch.object(DeviceManager, "_discover_with_pymobiledevice3_cli")
     @patch("services.device_manager.subprocess.run")
-    async def test_prefers_native_discovery(self, mock_run, mock_cli, mock_native):
+    def test_prefers_native_discovery(self, mock_run, mock_cli, mock_native):
         # Simulator discovery returns empty
         mock_run.return_value = MagicMock(returncode=0, stdout='{"devices": {}}')
 
@@ -165,7 +165,7 @@ class TestPhysicalDeviceDiscovery:
         mock_cli.return_value = []
 
         dm = DeviceManager()
-        devices = await dm.list_devices()
+        devices = dm.list_devices()
 
         physical = [d for d in devices if d.type == DeviceType.PHYSICAL]
         assert len(physical) == 1
@@ -175,7 +175,7 @@ class TestPhysicalDeviceDiscovery:
     @patch.object(DeviceManager, "_discover_with_pymobiledevice3_native")
     @patch.object(DeviceManager, "_discover_with_pymobiledevice3_cli")
     @patch("services.device_manager.subprocess.run")
-    async def test_falls_back_to_cli(self, mock_run, mock_cli, mock_native):
+    def test_falls_back_to_cli(self, mock_run, mock_cli, mock_native):
         # Simulator discovery returns empty
         mock_run.return_value = MagicMock(returncode=0, stdout='{"devices": {}}')
 
@@ -190,7 +190,7 @@ class TestPhysicalDeviceDiscovery:
         mock_cli.return_value = [cli_device]
 
         dm = DeviceManager()
-        devices = await dm.list_devices()
+        devices = dm.list_devices()
 
         physical = [d for d in devices if d.type == DeviceType.PHYSICAL]
         assert len(physical) == 1

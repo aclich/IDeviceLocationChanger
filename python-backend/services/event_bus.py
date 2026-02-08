@@ -17,7 +17,7 @@ Usage:
 import asyncio
 import json
 import logging
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,20 @@ class EventBus:
         self._subscribers: set[asyncio.Queue] = set()
         self._lock = asyncio.Lock()
         self._max_queue_size = max_queue_size
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
     
+    def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Store a reference to the main asyncio event loop.
+
+        Must be called from the running event loop (e.g., in run_http)
+        so that publish_sync can safely schedule tasks from worker threads.
+
+        Args:
+            loop: The main asyncio event loop
+        """
+        self._loop = loop
+        logger.debug("Event bus bound to event loop")
+
     async def subscribe(self) -> AsyncGenerator[dict, None]:
         """Subscribe to events. Yields events as they arrive.
         
@@ -99,27 +112,17 @@ class EventBus:
     
     def publish_sync(self, event: dict) -> None:
         """Synchronous publish - schedules async publish on the event loop.
-        
-        Use this from synchronous code or callbacks.
-        
+
+        Thread-safe: can be called from any thread. Uses call_soon_threadsafe
+        to schedule the coroutine on the main event loop.
+
         Args:
             event: Event dictionary to publish
         """
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(self.publish(event))
-        except RuntimeError:
-            # No running loop - likely during shutdown or from sync context
-            # Try to get or create a loop
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    loop.create_task(self.publish(event))
-                else:
-                    # Can't publish without running loop
-                    logger.debug("Cannot publish event: no running event loop")
-            except RuntimeError:
-                logger.debug("Cannot publish event: no event loop available")
+        if self._loop is None or self._loop.is_closed():
+            logger.debug("Cannot publish event: no event loop bound (call set_loop first)")
+            return
+        self._loop.call_soon_threadsafe(self._loop.create_task, self.publish(event))
     
     @property
     def subscriber_count(self) -> int:

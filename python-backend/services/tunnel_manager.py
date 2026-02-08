@@ -40,7 +40,7 @@ class TunnelManager:
     # Public API
     # =========================================================================
 
-    async def get_tunnel(self, udid: str) -> Optional[RSDTunnel]:
+    def get_tunnel(self, udid: str) -> Optional[RSDTunnel]:
         """
         Get tunnel for device by querying tunneld.
 
@@ -117,7 +117,7 @@ class TunnelManager:
             state.error = "Connection failed"
             logger.info(f"[{udid[:8]}] Tunnel marked as disconnected")
 
-    async def start_tunnel(self, udid: str) -> dict:
+    def start_tunnel(self, udid: str) -> dict:
         """
         Explicitly start tunnel for device. May require admin password.
 
@@ -149,7 +149,7 @@ class TunnelManager:
 
         # Step 2: Start new tunnel (requires admin)
         logger.info("No tunnel found, starting new tunnel...")
-        tunnel = await self._start_new_tunnel(udid)
+        tunnel = self._start_new_tunnel(udid)
 
         if tunnel:
             self._update_status(udid, TunnelStatus.CONNECTED, tunnel)
@@ -166,7 +166,7 @@ class TunnelManager:
             logger.error(f"[{udid[:8]}] FAILED: {self._last_error}")
             return {"success": False, "error": self._last_error or "Unknown error"}
 
-    async def stop_tunnel(self, udid: str = None) -> dict:
+    def stop_tunnel(self, udid: str = None) -> dict:
         """
         Stop tunnel for device or all tunnels.
 
@@ -289,7 +289,7 @@ class TunnelManager:
     # Start New Tunnel (requires admin)
     # =========================================================================
 
-    async def _start_new_tunnel(self, udid: str) -> Optional[RSDTunnel]:
+    def _start_new_tunnel(self, udid: str) -> Optional[RSDTunnel]:
         """Start new tunnel - platform specific, may require admin."""
         if sys.platform == "darwin":
             return self._start_tunnel_macos(udid)

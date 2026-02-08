@@ -40,7 +40,7 @@ class DeviceManager:
         env["PATH"] = ":".join(additional_paths) + ":" + env.get("PATH", "")
         return env
 
-    async def list_devices(self) -> List[Device]:
+    def list_devices(self) -> List[Device]:
         """Discover all connected devices (simulators and physical)."""
         logger.info("Discovering devices...")
 

@@ -6,10 +6,13 @@ to be restored when the app restarts.
 
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+FLUSH_INTERVAL = 5.0
 
 
 class LastLocationService:
@@ -35,6 +38,12 @@ class LastLocationService:
         # Ensure directory exists and load data
         self._ensure_dir_exists()
         self._load()
+
+        # Debounced disk writes: mark dirty and flush periodically
+        self._dirty = False
+        self._stop_event = threading.Event()
+        self._flush_thread = threading.Thread(target=self._flush_loop, daemon=True)
+        self._flush_thread.start()
 
     @property
     def file_path(self) -> Path:
@@ -79,6 +88,26 @@ class LastLocationService:
             logger.error(f"Failed to save last locations: {e}")
             return False
 
+    def _flush_loop(self) -> None:
+        """Background loop that periodically writes dirty data to disk."""
+        while not self._stop_event.is_set():
+            self._stop_event.wait(FLUSH_INTERVAL)
+            if self._dirty:
+                self._save()
+                self._dirty = False
+
+    def flush(self) -> None:
+        """Immediately write to disk if there are pending changes."""
+        if self._dirty:
+            self._save()
+            self._dirty = False
+
+    def close(self) -> None:
+        """Stop the flush thread and write any pending changes."""
+        self._stop_event.set()
+        self._flush_thread.join(timeout=2)
+        self.flush()
+
     def update(self, device_id: str, lat: float, lon: float) -> bool:
         """
         Update the last location for a device.
@@ -92,7 +121,8 @@ class LastLocationService:
             True if saved successfully, False otherwise
         """
         self._locations[device_id] = {"lat": lat, "lon": lon}
-        return self._save()
+        self._dirty = True
+        return True
 
     def get(self, device_id: str) -> Optional[dict]:
         """
