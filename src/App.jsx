@@ -2,9 +2,11 @@ import { useState, useCallback, useMemo } from 'react';
 import { useBackend } from './hooks/useBackend';
 import { useMovement } from './hooks/useMovement';
 import { useFavorites } from './hooks/useFavorites';
+import { useRouteCruise } from './hooks/useRouteCruise';
 import { MapWidget } from './components/MapWidget';
 import { DevicePanel } from './components/DevicePanel';
 import { ControlPanel } from './components/ControlPanel';
+import { RoutePanel } from './components/RoutePanel';
 import { FavoritesManager } from './components/FavoritesManager';
 import { DebugPage } from './components/DebugPage';
 import { distanceBetween } from './utils/coordinateCalculator';
@@ -37,6 +39,19 @@ function App() {
     pauseCruise,
     resumeCruise,
     setCruiseSpeed,
+    // Route cruise operations
+    routeStatus,
+    routeState,
+    addRouteWaypoint,
+    undoRouteWaypoint,
+    startRouteCruise,
+    pauseRouteCruise: pauseRouteCruiseRaw,
+    resumeRouteCruise: resumeRouteCruiseRaw,
+    rerouteRouteCruise,
+    stopRouteCruise,
+    setRouteCruiseSpeed,
+    clearRoute,
+    setRouteLoopMode,
   } = useBackend();
 
   // Wrap selectDevice to restore last location
@@ -68,6 +83,45 @@ function App() {
   const isCruising = cruiseStatus?.state === 'running' || cruiseStatus?.state === 'paused';
   const isMoving = isJoystickMoving || isCruising;
   const cruiseTarget = cruiseStatus?.target || null;
+
+  // Route cruise mode
+  const {
+    routeMode,
+    setRouteMode,
+    routeLoading,
+    isRouteCruising,
+    isRoutePaused,
+    waypoints: routeWaypoints,
+    segments: routeSegments,
+    loopMode,
+    totalDistanceKm,
+    hasRoute,
+    progressInfo: routeProgressInfo,
+    addWaypoint,
+    undoWaypoint,
+    startRoute,
+    pauseRoute,
+    resumeRoute,
+    stopRoute,
+    setRouteSpeed,
+    toggleLoopMode,
+    clearRoute: clearRouteAction,
+  } = useRouteCruise({
+    addRouteWaypoint,
+    undoRouteWaypoint,
+    startRouteCruise,
+    pauseRouteCruise: pauseRouteCruiseRaw,
+    resumeRouteCruise: resumeRouteCruiseRaw,
+    rerouteRouteCruise,
+    stopRouteCruise,
+    setRouteCruiseSpeed,
+    clearRoute,
+    setRouteLoopMode,
+    routeStatus,
+    routeState,
+    location,
+    selectedDevice,
+  });
 
   // Favorites management
   const {
@@ -128,13 +182,27 @@ function App() {
     resumeCruise();
   }, [resumeCruise]);
 
+  // Handle mode changes from ControlPanel
+  const handleModeChange = useCallback((newMode) => {
+    const wasRouteMode = routeMode;
+    setRouteMode(newMode === 'route');
+
+    // Auto-pause route cruise when switching away from route mode
+    if (wasRouteMode && newMode !== 'route' && isRouteCruising && !isRoutePaused) {
+      pauseRoute();
+    }
+  }, [routeMode, setRouteMode, isRouteCruising, isRoutePaused, pauseRoute]);
+
   // Update cruise speed when slider changes during cruise
   const handleSpeedChange = useCallback((newSpeed) => {
     setSpeed(newSpeed);
     if (isCruising) {
       setCruiseSpeed(newSpeed);
     }
-  }, [setSpeed, isCruising, setCruiseSpeed]);
+    if (isRouteCruising) {
+      setRouteSpeed(newSpeed);
+    }
+  }, [setSpeed, isCruising, setCruiseSpeed, isRouteCruising, setRouteSpeed]);
 
   // Favorites handlers
   const handleFavoriteSelect = useCallback((favorite) => {
@@ -234,6 +302,9 @@ function App() {
               cruiseTarget={cruiseTarget}
               onLocationSelect={handleMapClick}
               flyTo={flyToLocation}
+              routeMode={routeMode}
+              routeState={routeState}
+              onAddWaypoint={addWaypoint}
             />
           </div>
 
@@ -274,6 +345,7 @@ function App() {
               onJoystickRelease={releaseJoystick}
               onSpeedChange={handleSpeedChange}
               onDirectInput={handleDirectInput}
+              onModeChange={handleModeChange}
               favorites={favorites}
               favoritesLoading={favoritesLoading}
               onFavoriteSelect={handleFavoriteSelect}
@@ -281,6 +353,29 @@ function App() {
               onManageFavorites={() => setShowFavoritesManager(true)}
               canSaveLocation={!!(pendingLocation || location)}
               hasSelectedLocation={!!pendingLocation}
+            />
+
+            <RoutePanel
+              routeMode={routeMode}
+              onToggleRouteMode={() => setRouteMode(!routeMode)}
+              isRouteCruising={isRouteCruising}
+              isRoutePaused={isRoutePaused}
+              waypoints={routeWaypoints}
+              segments={routeSegments}
+              loopMode={loopMode}
+              totalDistanceKm={totalDistanceKm}
+              hasRoute={hasRoute}
+              progressInfo={routeProgressInfo}
+              speed={speed}
+              onStartRoute={startRoute}
+              onPauseRoute={pauseRoute}
+              onResumeRoute={resumeRoute}
+              onStopRoute={stopRoute}
+              onClearRoute={clearRouteAction}
+              onUndoWaypoint={undoWaypoint}
+              onToggleLoopMode={toggleLoopMode}
+              selectedDevice={selectedDevice}
+              routeLoading={routeLoading}
             />
           </div>
         </div>
@@ -300,6 +395,11 @@ function App() {
           {isCruising && cruiseInfo && (
             <span>
               {cruiseInfo.isPaused ? 'Paused' : 'Cruising'}: {cruiseInfo.distance} remaining • ETA {cruiseInfo.eta} • {speed.toFixed(1)} km/h
+            </span>
+          )}
+          {isRouteCruising && routeProgressInfo && (
+            <span>
+              {isRoutePaused ? 'Route Paused' : 'Route Cruising'}: Seg {routeProgressInfo.currentSegment}/{routeProgressInfo.totalSegments} • {(routeProgressInfo.remainingKm < 1 ? `${(routeProgressInfo.remainingKm * 1000).toFixed(0)}m` : `${routeProgressInfo.remainingKm.toFixed(1)}km`)} remaining
             </span>
           )}
         </div>

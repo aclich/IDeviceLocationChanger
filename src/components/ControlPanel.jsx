@@ -7,6 +7,7 @@ const MODES = {
   DIRECT: 'direct',
   JOYSTICK: 'joystick',
   CRUISE: 'cruise',
+  ROUTE: 'route',
 };
 
 export function ControlPanel({
@@ -291,8 +292,8 @@ export function ControlPanel({
         </div>
       )}
 
-      {/* Movement settings (for joystick and cruise) */}
-      {(mode === MODES.JOYSTICK || mode === MODES.CRUISE) && (
+      {/* Movement settings (for joystick, cruise, and route) */}
+      {(mode === MODES.JOYSTICK || mode === MODES.CRUISE || mode === MODES.ROUTE) && (
         <div className="settings-section">
           <div className="custom-speed-row">
             <label className="custom-speed-label">

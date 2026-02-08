@@ -22,51 +22,47 @@ class TestTunnelManagerInit:
 class TestTunnelManagerGetTunnel:
     """Tests for get_tunnel method."""
 
-    @pytest.mark.asyncio
-    async def test_get_tunnel_queries_tunneld_fresh(self):
+    def test_get_tunnel_queries_tunneld_fresh(self):
         """get_tunnel should always query tunneld fresh, no caching."""
         manager = TunnelManager()
         mock_tunnel = RSDTunnel(address="fd10::1", port=62050, udid="test-udid")
 
         with patch.object(manager, '_query_tunneld_http', return_value=mock_tunnel) as mock_query:
-            result = await manager.get_tunnel("test-udid")
+            result = manager.get_tunnel("test-udid")
 
             mock_query.assert_called_once_with("test-udid")
             assert result is not None
             assert result.address == "fd10::1"
             assert result.port == 62050
 
-    @pytest.mark.asyncio
-    async def test_get_tunnel_returns_none_when_no_tunnel(self):
+    def test_get_tunnel_returns_none_when_no_tunnel(self):
         """get_tunnel returns None when tunneld has no tunnel for device."""
         manager = TunnelManager()
 
         with patch.object(manager, '_query_tunneld_http', return_value=None):
-            result = await manager.get_tunnel("unknown-device")
+            result = manager.get_tunnel("unknown-device")
 
             assert result is None
 
-    @pytest.mark.asyncio
-    async def test_get_tunnel_updates_status_on_success(self):
+    def test_get_tunnel_updates_status_on_success(self):
         """get_tunnel updates last status when tunnel found."""
         manager = TunnelManager()
         mock_tunnel = RSDTunnel(address="fd10::1", port=62050, udid="test-udid")
 
         with patch.object(manager, '_query_tunneld_http', return_value=mock_tunnel):
-            await manager.get_tunnel("test-udid")
+            manager.get_tunnel("test-udid")
 
             assert "test-udid" in manager._last_status
             assert manager._last_status["test-udid"].status == TunnelStatus.CONNECTED
 
-    @pytest.mark.asyncio
-    async def test_get_tunnel_returns_none_for_empty_udid(self):
+    def test_get_tunnel_returns_none_for_empty_udid(self):
         """get_tunnel returns None when called without UDID."""
         manager = TunnelManager()
 
-        result = await manager.get_tunnel("")
+        result = manager.get_tunnel("")
         assert result is None
 
-        result = await manager.get_tunnel(None)
+        result = manager.get_tunnel(None)
         assert result is None
 
 
@@ -255,8 +251,7 @@ class TestTunnelManagerExtractTunnelInfo:
 class TestTunnelManagerStopTunnel:
     """Tests for stop_tunnel method."""
 
-    @pytest.mark.asyncio
-    async def test_stop_tunnel_clears_specific_device_state(self):
+    def test_stop_tunnel_clears_specific_device_state(self):
         manager = TunnelManager()
         tunnel = RSDTunnel(address="192.168.1.1", port=8080, udid="test-udid")
         state = TunnelState(
@@ -266,7 +261,7 @@ class TestTunnelManagerStopTunnel:
         )
         manager._last_status["test-udid"] = state
 
-        result = await manager.stop_tunnel(udid="test-udid")
+        result = manager.stop_tunnel(udid="test-udid")
 
         assert result["success"] is True
         assert "test-udid" not in manager._last_status

@@ -13,7 +13,12 @@ def server():
     with patch("main.DeviceManager") as MockDeviceManager, \
          patch("main.LocationService") as MockLocationService, \
          patch("main.TunnelManager") as MockTunnelManager, \
-         patch("main.FavoritesService") as MockFavoritesService:
+         patch("main.FavoritesService") as MockFavoritesService, \
+         patch("main.CruiseService") as MockCruiseService, \
+         patch("main.LastLocationService") as MockLastLocationService, \
+         patch("main.PortForwardService") as MockPortForwardService, \
+         patch("main.BrouterService") as MockBrouterService, \
+         patch("main.RouteService") as MockRouteService:
 
         server = LocationSimulatorServer()
 
@@ -22,6 +27,11 @@ def server():
         server.location = MockLocationService.return_value
         server.tunnel = MockTunnelManager.return_value
         server.favorites = MockFavoritesService.return_value
+        server.cruise = MockCruiseService.return_value
+        server.last_locations = MockLastLocationService.return_value
+        server.port_forward = MockPortForwardService.return_value
+        server.brouter = MockBrouterService.return_value
+        server.route = MockRouteService.return_value
 
         yield server
 
@@ -40,7 +50,7 @@ class TestHandleRequest:
         assert "unknownMethod" in response["error"]["message"]
 
     async def test_method_exception_returns_error(self, server):
-        server.devices.list_devices = AsyncMock(side_effect=Exception("Test error"))
+        server.devices.list_devices = MagicMock(side_effect=Exception("Test error"))
         request = {"id": "2", "method": "listDevices", "params": {}}
 
         response = await server.handle_request(request)
@@ -61,7 +71,7 @@ class TestListDevices:
             type=DeviceType.SIMULATOR,
             state=DeviceState.CONNECTED,
         )
-        server.devices.list_devices = AsyncMock(return_value=[mock_device])
+        server.devices.list_devices = MagicMock(return_value=[mock_device])
 
         request = {"id": "1", "method": "listDevices", "params": {}}
         response = await server.handle_request(request)
@@ -72,7 +82,7 @@ class TestListDevices:
         assert response["result"]["devices"][0]["id"] == "sim-123"
 
     async def test_list_devices_empty(self, server):
-        server.devices.list_devices = AsyncMock(return_value=[])
+        server.devices.list_devices = MagicMock(return_value=[])
 
         request = {"id": "1", "method": "listDevices", "params": {}}
         response = await server.handle_request(request)
@@ -129,8 +139,8 @@ class TestSetLocation:
         mock_tunnel = MagicMock()
         server._selected_device = mock_device
         server.devices.get_device = MagicMock(return_value=mock_device)
-        server.tunnel.get_tunnel = AsyncMock(return_value=mock_tunnel)
-        server.location.set_location = AsyncMock(return_value={"success": True})
+        server.location.set_location = MagicMock(return_value={"success": True})
+        server.last_locations.update = MagicMock()
 
         request = {
             "id": "1",
@@ -141,7 +151,7 @@ class TestSetLocation:
 
         assert response["result"]["success"] is True
         server.location.set_location.assert_called_once_with(
-            mock_device, 25.033, 121.565, tunnel=mock_tunnel
+            mock_device, 25.033, 121.565,
         )
 
     async def test_set_location_no_device_selected(self, server):
@@ -177,17 +187,15 @@ class TestClearLocation:
             type=DeviceType.PHYSICAL,
             state=DeviceState.CONNECTED,
         )
-        mock_tunnel = MagicMock()
         server._selected_device = mock_device
         server.devices.get_device = MagicMock(return_value=mock_device)
-        server.tunnel.get_tunnel = AsyncMock(return_value=mock_tunnel)
-        server.location.clear_location = AsyncMock(return_value={"success": True})
+        server.location.clear_location = MagicMock(return_value={"success": True})
 
         request = {"id": "1", "method": "clearLocation", "params": {}}
         response = await server.handle_request(request)
 
         assert response["result"]["success"] is True
-        server.location.clear_location.assert_called_once_with(mock_device, tunnel=mock_tunnel)
+        server.location.clear_location.assert_called_once_with(mock_device)
 
     async def test_clear_location_no_device_selected(self, server):
         server._selected_device = None
@@ -203,7 +211,7 @@ class TestTunnelOperations:
     """Tests for tunnel-related RPC methods."""
 
     async def test_start_tunnel_success(self, server):
-        server.tunnel.start_tunnel = AsyncMock(return_value={
+        server.tunnel.start_tunnel = MagicMock(return_value={
             "success": True,
             "address": "127.0.0.1",
             "port": 12345,
@@ -237,7 +245,7 @@ class TestTunnelOperations:
 
     async def test_start_tunnel_failure_with_udid(self, server):
         """startTunnel with UDID but tunnel fails."""
-        server.tunnel.start_tunnel = AsyncMock(return_value={
+        server.tunnel.start_tunnel = MagicMock(return_value={
             "success": False,
             "error": "No device connected",
         })
@@ -249,7 +257,7 @@ class TestTunnelOperations:
         assert "No device connected" in response["result"]["error"]
 
     async def test_stop_tunnel(self, server):
-        server.tunnel.stop_tunnel = AsyncMock(return_value={"success": True})
+        server.tunnel.stop_tunnel = MagicMock(return_value={"success": True})
 
         request = {"id": "1", "method": "stopTunnel", "params": {}}
         response = await server.handle_request(request)

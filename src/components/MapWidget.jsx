@@ -10,7 +10,7 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
 });
 
-export function MapWidget({ location, onLocationSelect, pendingLocation, cruiseTarget, flyTo }) {
+export function MapWidget({ location, onLocationSelect, pendingLocation, cruiseTarget, flyTo, routeMode, routeState, onAddWaypoint }) {
   const mapRef = useRef(null);
   const containerRef = useRef(null);
   const mapInstance = useRef(null);
@@ -18,6 +18,10 @@ export function MapWidget({ location, onLocationSelect, pendingLocation, cruiseT
   const pendingMarkerRef = useRef(null);
   const targetMarkerRef = useRef(null);
   const routeLineRef = useRef(null);
+  const routePolylinesRef = useRef([]);
+  const waypointMarkersRef = useRef([]);
+  const routeModeRef = useRef(false);
+  const onAddWaypointRef = useRef(null);
 
   // Map follow mode - when true, map auto-pans to follow location updates
   const [followLocation, setFollowLocation] = useState(true);
@@ -96,6 +100,15 @@ export function MapWidget({ location, onLocationSelect, pendingLocation, cruiseT
     );
   }, [location, onLocationSelect]);
 
+  // Keep refs in sync to avoid stale closure in map click handler
+  useEffect(() => {
+    routeModeRef.current = routeMode;
+  }, [routeMode]);
+
+  useEffect(() => {
+    onAddWaypointRef.current = onAddWaypoint;
+  }, [onAddWaypoint]);
+
   // Initialize map
   useEffect(() => {
     if (!mapRef.current || mapInstance.current) return;
@@ -110,10 +123,14 @@ export function MapWidget({ location, onLocationSelect, pendingLocation, cruiseT
       maxZoom: 19,
     }).addTo(mapInstance.current);
 
-    // Click handler
+    // Click handler - uses refs to avoid stale closure
     mapInstance.current.on('click', (e) => {
       const { lat, lng } = e.latlng;
-      onLocationSelect?.(lat, lng);
+      if (routeModeRef.current && onAddWaypointRef.current) {
+        onAddWaypointRef.current(lat, lng);
+      } else {
+        onLocationSelect?.(lat, lng);
+      }
     });
 
     // Try to get user's current location (silent failure on startup)
@@ -140,6 +157,8 @@ export function MapWidget({ location, onLocationSelect, pendingLocation, cruiseT
 
     return () => {
       isMounted = false;
+      routePolylinesRef.current.forEach(p => p.remove());
+      waypointMarkersRef.current.forEach(m => m.remove());
       if (mapInstance.current) {
         mapInstance.current.remove();
         mapInstance.current = null;
@@ -192,11 +211,11 @@ export function MapWidget({ location, onLocationSelect, pendingLocation, cruiseT
     }
   }, [pendingLocation]);
 
-  // Update cruise target marker and route line
+  // Update cruise target marker and route line (hide during route mode)
   useEffect(() => {
     if (!mapInstance.current) return;
 
-    if (cruiseTarget) {
+    if (cruiseTarget && !routeMode) {
       const { latitude, longitude } = cruiseTarget;
 
       // Target marker (destination)
@@ -244,7 +263,52 @@ export function MapWidget({ location, onLocationSelect, pendingLocation, cruiseT
         routeLineRef.current = null;
       }
     }
-  }, [cruiseTarget, location]);
+  }, [cruiseTarget, location, routeMode]);
+
+  // Draw route polylines and waypoint markers
+  useEffect(() => {
+    if (!mapInstance.current) return;
+
+    // Clear old route polylines
+    routePolylinesRef.current.forEach(p => p.remove());
+    routePolylinesRef.current = [];
+
+    // Clear old waypoint markers
+    waypointMarkersRef.current.forEach(m => m.remove());
+    waypointMarkersRef.current = [];
+
+    if (!routeState) return;
+
+    const { segments = [], waypoints = [] } = routeState;
+
+    // Draw polylines for each segment
+    segments.forEach(segment => {
+      if (!segment.path || segment.path.length < 2) return;
+      const latlngs = segment.path.map(p => [p[0], p[1]]);
+      const polyline = L.polyline(latlngs, {
+        color: segment.isClosure ? '#06b6d4' : '#14b8a6',
+        weight: 4,
+        opacity: 0.8,
+        dashArray: segment.isClosure ? '8, 8' : null,
+      }).addTo(mapInstance.current);
+      routePolylinesRef.current.push(polyline);
+    });
+
+    // Draw waypoint markers
+    waypoints.forEach((wp, i) => {
+      const isStart = wp.name === 'START';
+      const marker = L.circleMarker([wp.lat, wp.lng], {
+        radius: isStart ? 10 : 7,
+        color: isStart ? '#3b82f6' : '#f97316',
+        fillColor: isStart ? '#3b82f6' : '#f97316',
+        fillOpacity: 0.8,
+        weight: 2,
+      })
+        .addTo(mapInstance.current)
+        .bindTooltip(wp.name, { permanent: true, direction: 'top', offset: [0, -10], className: 'route-waypoint-tooltip' });
+      waypointMarkersRef.current.push(marker);
+    });
+  }, [routeState]);
 
   return (
     <div

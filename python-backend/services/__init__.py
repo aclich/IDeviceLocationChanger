@@ -7,6 +7,8 @@ from .favorites_service import FavoritesService
 from .cruise_service import CruiseService
 from .last_location_service import LastLocationService
 from .port_forward_service import PortForwardService
+from .brouter_service import BrouterService
+from .route_service import RouteService
 from .event_bus import EventBus, event_bus
 from . import coordinate_utils
 
@@ -18,6 +20,8 @@ __all__ = [
     'CruiseService',
     'LastLocationService',
     'PortForwardService',
+    'BrouterService',
+    'RouteService',
     'EventBus',
     'event_bus',
     'coordinate_utils',

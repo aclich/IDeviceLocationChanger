@@ -16,13 +16,15 @@ All coordinate calculations are handled by the frontend.
 import sys
 import json
 import asyncio
+import inspect
 import logging
 import argparse
 from datetime import datetime
 from typing import Optional
 
-from models import Device, DeviceType
-from services import DeviceManager, LocationService, TunnelManager, FavoritesService, CruiseService, LastLocationService, PortForwardService, event_bus
+from models import Device, DeviceType, RSDTunnel
+from services import DeviceManager, LocationService, TunnelManager, FavoritesService, CruiseService, LastLocationService, PortForwardService, BrouterService, RouteService, event_bus
+
 
 # Configure logging to stderr
 logging.basicConfig(
@@ -52,6 +54,8 @@ class LocationSimulatorServer:
         self.cruise = CruiseService()
         self.last_locations = LastLocationService()
         self.port_forward = PortForwardService()
+        self.brouter = BrouterService()
+        self.route = RouteService(self.cruise, self.brouter)
 
         # Wire up tunnel provider for retry mechanism
         # This allows LocationService to get fresh tunnel info on connection errors
@@ -60,6 +64,9 @@ class LocationSimulatorServer:
         # Wire up cruise service callbacks
         self.cruise.set_location_callback(self._set_location_for_cruise)
         self.cruise.set_event_emitter(self._emit_event)
+
+        # Wire up route service callbacks
+        self.route.set_event_emitter(self._emit_event)
 
         # State
         self._selected_device: Optional[Device] = None
@@ -94,16 +101,28 @@ class LocationSimulatorServer:
             "startPortForward": self._start_port_forward,
             "stopPortForward": self._stop_port_forward,
             "listPortForwards": self._list_port_forwards,
+            # Route Cruise
+            "addRouteWaypoint": self._add_route_waypoint,
+            "undoRouteWaypoint": self._undo_route_waypoint,
+            "startRouteCruise": self._start_route_cruise,
+            "getRouteStatus": self._get_route_status,
+            "pauseRouteCruise": self._pause_route_cruise,
+            "resumeRouteCruise": self._resume_route_cruise,
+            "rerouteRouteCruise": self._reroute_route_cruise,
+            "stopRouteCruise": self._stop_route_cruise,
+            "setRouteCruiseSpeed": self._set_route_cruise_speed,
+            "clearRoute": self._clear_route,
+            "setRouteLoopMode": self._set_route_loop_mode,
         }
 
         logger.info("Location Simulator Backend initialized")
 
-    async def _get_tunnel_for_device(self, udid: str):
+    def _get_tunnel_for_device(self, udid: str) -> Optional[RSDTunnel]:
         """Tunnel provider callback for LocationService retry mechanism.
 
-        Queries tunneld for fresh tunnel info.
+        Queries tunneld for fresh tunnel info. Sync — TunnelManager is sync.
         """
-        return await self.tunnel.get_tunnel(udid)
+        return self.tunnel.get_tunnel(udid)
 
     def _emit_event(self, event: dict) -> None:
         """Emit an event to all SSE subscribers.
@@ -113,7 +132,7 @@ class LocationSimulatorServer:
         """
         event_bus.publish_sync(event)
 
-    async def _set_location_for_cruise(
+    def _set_location_for_cruise(
         self,
         device_id: str,
         latitude: float,
@@ -121,7 +140,9 @@ class LocationSimulatorServer:
     ) -> dict:
         """Set location callback for CruiseService.
 
-        This is called by the cruise loop to update device location.
+        Sync — called from cruise thread. No tunneld query here —
+        LocationService manages connections internally and only queries
+        tunneld on retry after connection failure.
         """
         device = self.devices.get_device(device_id)
         if not device:
@@ -129,21 +150,7 @@ class LocationSimulatorServer:
         if not device:
             return {"success": False, "error": "Device not found"}
 
-        # For physical devices, get tunnel from TunnelManager
-        tunnel = None
-        if device.type == DeviceType.PHYSICAL:
-            tunnel = await self.tunnel.get_tunnel(device.id)
-
-        result = await self.location.set_location(
-            device,
-            latitude,
-            longitude,
-            tunnel=tunnel
-        )
-
-        # If tunnel was used but failed, invalidate it for refresh on next try
-        if tunnel and not result.get("success"):
-            self.tunnel.invalidate(device.id)
+        result = self.location.set_location(device, latitude, longitude)
 
         # Persist last location on success
         if result.get("success"):
@@ -155,8 +162,22 @@ class LocationSimulatorServer:
     # JSON-RPC Handler
     # =========================================================================
 
+    # Methods that do blocking I/O and need run_in_executor
+    _BLOCKING_METHODS = {
+        "listDevices", "setLocation", "clearLocation",
+        "startTunnel", "stopTunnel",
+        "startCruise", "stopCruise", "pauseCruise", "resumeCruise",
+        "startRouteCruise", "stopRouteCruise", "pauseRouteCruise", "resumeRouteCruise",
+    }
+
     async def handle_request(self, request: dict) -> dict:
-        """Handle a single JSON-RPC request."""
+        """Handle a single JSON-RPC request.
+
+        Dispatches to sync, async, or blocking sync methods:
+        - Sync methods: called directly (fast, no I/O)
+        - Async methods: awaited (calls async services like BrouterService)
+        - Blocking sync methods: run in executor (may block on I/O)
+        """
         request_id = request.get("id")
         method = request.get("method")
         params = request.get("params", {})
@@ -168,7 +189,17 @@ class LocationSimulatorServer:
             }
 
         try:
-            result = await self._methods[method](params)
+            handler = self._methods[method]
+            if inspect.iscoroutinefunction(handler):
+                # Async method — await it
+                result = await handler(params)
+            elif method in self._BLOCKING_METHODS:
+                # Blocking sync method — run in thread pool
+                loop = asyncio.get_running_loop()
+                result = await loop.run_in_executor(None, handler, params)
+            else:
+                # Fast sync method — call directly
+                result = handler(params)
             return {"id": request_id, "result": result}
         except Exception as e:
             logger.exception(f"Error handling {method}: {e}")
@@ -181,12 +212,12 @@ class LocationSimulatorServer:
     # RPC Methods
     # =========================================================================
 
-    async def _list_devices(self, params: dict) -> dict:
+    def _list_devices(self, params: dict) -> dict:
         """List all connected devices."""
-        devices = await self.devices.list_devices()
+        devices = self.devices.list_devices()
         return {"devices": [d.to_dict() for d in devices]}
 
-    async def _select_device(self, params: dict) -> dict:
+    def _select_device(self, params: dict) -> dict:
         """Select a device for location simulation."""
         device_id = params.get("deviceId")
         if not device_id:
@@ -199,10 +230,12 @@ class LocationSimulatorServer:
         self._selected_device = device
         return {"success": True, "device": device.to_dict()}
 
-    async def _set_location(self, params: dict) -> dict:
+    def _set_location(self, params: dict) -> dict:
         """Set location on selected device.
 
         Accepts either deviceId parameter or uses selected device.
+        No tunneld query here — LocationService manages connections
+        internally and only queries tunneld on retry after failure.
         """
         # Get device from params or fallback to selected device
         device_id = params.get("deviceId")
@@ -223,21 +256,11 @@ class LocationSimulatorServer:
         if latitude is None or longitude is None:
             return {"success": False, "error": "latitude and longitude required"}
 
-        # For physical devices, get tunnel from TunnelManager
-        tunnel = None
-        if device.type == DeviceType.PHYSICAL:
-            tunnel = await self.tunnel.get_tunnel(device.id)
-
-        result = await self.location.set_location(
+        result = self.location.set_location(
             device,
             float(latitude),
             float(longitude),
-            tunnel=tunnel
         )
-
-        # If tunnel was used but failed, invalidate it for refresh on next try
-        if tunnel and not result.get("success"):
-            self.tunnel.invalidate(device.id)
 
         # Persist last location on success
         if result.get("success"):
@@ -245,7 +268,7 @@ class LocationSimulatorServer:
 
         return result
 
-    async def _clear_location(self, params: dict) -> dict:
+    def _clear_location(self, params: dict) -> dict:
         """Clear simulated location on selected device.
 
         Accepts either deviceId parameter or uses selected device.
@@ -263,20 +286,11 @@ class LocationSimulatorServer:
         else:
             return {"success": False, "error": "No device selected"}
 
-        # For physical devices, get tunnel from TunnelManager
-        tunnel = None
-        if device.type == DeviceType.PHYSICAL:
-            tunnel = await self.tunnel.get_tunnel(device.id)
-
-        result = await self.location.clear_location(device, tunnel=tunnel)
-
-        # If tunnel was used but failed, invalidate it for refresh on next try
-        if tunnel and not result.get("success"):
-            self.tunnel.invalidate(device.id)
+        result = self.location.clear_location(device)
 
         return result
 
-    async def _start_tunnel(self, params: dict) -> dict:
+    def _start_tunnel(self, params: dict) -> dict:
         """Start RSD tunnel for iOS 17+ devices."""
         # Get UDID from params or selected device
         udid = params.get("udid")
@@ -286,11 +300,10 @@ class LocationSimulatorServer:
         if not udid:
             return {"success": False, "error": "No device specified. Select a device first."}
 
-        result = await self.tunnel.start_tunnel(udid)
+        result = self.tunnel.start_tunnel(udid)
 
         # Update device with tunnel info on success
         if result.get("success") and result.get("address"):
-            from models import RSDTunnel
             tunnel = RSDTunnel(
                 address=result["address"],
                 port=result["port"],
@@ -304,15 +317,15 @@ class LocationSimulatorServer:
 
         return result
 
-    async def _stop_tunnel(self, params: dict) -> dict:
+    def _stop_tunnel(self, params: dict) -> dict:
         """Stop RSD tunnel for device or all tunnels."""
         udid = params.get("udid")
         # If no UDID specified and we have a selected device, use that
         if not udid and self._selected_device:
             udid = self._selected_device.id
-        return await self.tunnel.stop_tunnel(udid)
+        return self.tunnel.stop_tunnel(udid)
 
-    async def _get_tunnel_status(self, params: dict) -> dict:
+    def _get_tunnel_status(self, params: dict) -> dict:
         """Get current tunnel status."""
         udid = params.get("udid")
         # If no UDID specified and we have a selected device, use that
@@ -324,12 +337,12 @@ class LocationSimulatorServer:
     # Favorites Operations
     # =========================================================================
 
-    async def _get_favorites(self, params: dict) -> dict:
+    def _get_favorites(self, params: dict) -> dict:
         """Get all favorite locations."""
         favorites = self.favorites.get_all()
         return {"favorites": [f.to_dict() for f in favorites]}
 
-    async def _add_favorite(self, params: dict) -> dict:
+    def _add_favorite(self, params: dict) -> dict:
         """Add a new favorite location."""
         latitude = params.get("latitude")
         longitude = params.get("longitude")
@@ -340,7 +353,7 @@ class LocationSimulatorServer:
 
         return self.favorites.add(float(latitude), float(longitude), name)
 
-    async def _update_favorite(self, params: dict) -> dict:
+    def _update_favorite(self, params: dict) -> dict:
         """Update (rename) a favorite location."""
         index = params.get("index")
         name = params.get("name")
@@ -352,7 +365,7 @@ class LocationSimulatorServer:
 
         return self.favorites.update(int(index), name)
 
-    async def _delete_favorite(self, params: dict) -> dict:
+    def _delete_favorite(self, params: dict) -> dict:
         """Delete a favorite location."""
         index = params.get("index")
 
@@ -361,7 +374,7 @@ class LocationSimulatorServer:
 
         return self.favorites.delete(int(index))
 
-    async def _import_favorites(self, params: dict) -> dict:
+    def _import_favorites(self, params: dict) -> dict:
         """Import favorites from a file."""
         file_path = params.get("filePath")
 
@@ -374,7 +387,7 @@ class LocationSimulatorServer:
     # Cruise Operations
     # =========================================================================
 
-    async def _start_cruise(self, params: dict) -> dict:
+    def _start_cruise(self, params: dict) -> dict:
         """Start cruise mode towards a target location."""
         # Get device ID from params or selected device
         device_id = params.get("deviceId")
@@ -394,7 +407,7 @@ class LocationSimulatorServer:
         if None in (start_lat, start_lon, target_lat, target_lon):
             return {"success": False, "error": "Start and target coordinates required"}
 
-        return await self.cruise.start_cruise(
+        return self.cruise.start_cruise(
             device_id=device_id,
             start_lat=float(start_lat),
             start_lon=float(start_lon),
@@ -403,7 +416,7 @@ class LocationSimulatorServer:
             speed_kmh=float(speed)
         )
 
-    async def _stop_cruise(self, params: dict) -> dict:
+    def _stop_cruise(self, params: dict) -> dict:
         """Stop cruise mode."""
         device_id = params.get("deviceId")
         if not device_id and self._selected_device:
@@ -412,9 +425,9 @@ class LocationSimulatorServer:
         if not device_id:
             return {"success": False, "error": "No device specified"}
 
-        return await self.cruise.stop_cruise(device_id)
+        return self.cruise.stop_cruise(device_id)
 
-    async def _pause_cruise(self, params: dict) -> dict:
+    def _pause_cruise(self, params: dict) -> dict:
         """Pause cruise mode."""
         device_id = params.get("deviceId")
         if not device_id and self._selected_device:
@@ -423,9 +436,9 @@ class LocationSimulatorServer:
         if not device_id:
             return {"success": False, "error": "No device specified"}
 
-        return await self.cruise.pause_cruise(device_id)
+        return self.cruise.pause_cruise(device_id)
 
-    async def _resume_cruise(self, params: dict) -> dict:
+    def _resume_cruise(self, params: dict) -> dict:
         """Resume paused cruise mode."""
         device_id = params.get("deviceId")
         if not device_id and self._selected_device:
@@ -434,9 +447,9 @@ class LocationSimulatorServer:
         if not device_id:
             return {"success": False, "error": "No device specified"}
 
-        return await self.cruise.resume_cruise(device_id)
+        return self.cruise.resume_cruise(device_id)
 
-    async def _set_cruise_speed(self, params: dict) -> dict:
+    def _set_cruise_speed(self, params: dict) -> dict:
         """Set cruise speed."""
         device_id = params.get("deviceId")
         if not device_id and self._selected_device:
@@ -451,7 +464,7 @@ class LocationSimulatorServer:
 
         return self.cruise.set_cruise_speed(device_id, float(speed))
 
-    async def _get_cruise_status(self, params: dict) -> dict:
+    def _get_cruise_status(self, params: dict) -> dict:
         """Get cruise status for a device."""
         device_id = params.get("deviceId")
         if not device_id and self._selected_device:
@@ -466,7 +479,7 @@ class LocationSimulatorServer:
     # Last Location Operations
     # =========================================================================
 
-    async def _get_last_location(self, params: dict) -> dict:
+    def _get_last_location(self, params: dict) -> dict:
         """Get the last set location for a device."""
         device_id = params.get("deviceId")
         if not device_id:
@@ -485,7 +498,7 @@ class LocationSimulatorServer:
     # Port Forwarding Operations
     # =========================================================================
 
-    async def _list_interfaces(self, params: dict) -> dict:
+    def _list_interfaces(self, params: dict) -> dict:
         """List available network interfaces."""
         interfaces = self.port_forward.list_interfaces()
         return {"interfaces": interfaces}
@@ -523,10 +536,156 @@ class LocationSimulatorServer:
 
         return await self.port_forward.stop_forward(listen_ip, int(listen_port))
 
-    async def _list_port_forwards(self, params: dict) -> dict:
+    def _list_port_forwards(self, params: dict) -> dict:
         """List active port forwards."""
         forwards = self.port_forward.list_forwards()
         return {"forwards": forwards}
+
+    # =========================================================================
+    # Route Cruise Operations
+    # =========================================================================
+
+    async def _add_route_waypoint(self, params: dict) -> dict:
+        """Add a waypoint to the route."""
+        device_id = params.get("deviceId")
+        if not device_id and self._selected_device:
+            device_id = self._selected_device.id
+
+        if not device_id:
+            return {"success": False, "error": "No device specified"}
+
+        lat = params.get("lat")
+        lng = params.get("lng")
+        if lat is None or lng is None:
+            return {"success": False, "error": "lat and lng required"}
+
+        return await self.route.add_waypoint(device_id, float(lat), float(lng))
+
+    async def _undo_route_waypoint(self, params: dict) -> dict:
+        """Remove the last waypoint from the route."""
+        device_id = params.get("deviceId")
+        if not device_id and self._selected_device:
+            device_id = self._selected_device.id
+
+        if not device_id:
+            return {"success": False, "error": "No device specified"}
+
+        return await self.route.undo_waypoint(device_id)
+
+    def _start_route_cruise(self, params: dict) -> dict:
+        """Start route cruise."""
+        device_id = params.get("deviceId")
+        if not device_id and self._selected_device:
+            device_id = self._selected_device.id
+
+        if not device_id:
+            return {"success": False, "error": "No device specified"}
+
+        speed = params.get("speedKmh", 5.0)
+        return self.route.start_route_cruise(device_id, float(speed))
+
+    def _get_route_status(self, params: dict) -> dict:
+        """Get route status for a device."""
+        device_id = params.get("deviceId")
+        if not device_id and self._selected_device:
+            device_id = self._selected_device.id
+
+        if not device_id:
+            return {"success": False, "error": "No device specified"}
+
+        return self.route.get_route_status(device_id)
+
+    def _pause_route_cruise(self, params: dict) -> dict:
+        """Pause route cruise."""
+        device_id = params.get("deviceId")
+        if not device_id and self._selected_device:
+            device_id = self._selected_device.id
+
+        if not device_id:
+            return {"success": False, "error": "No device specified"}
+
+        return self.route.pause_route_cruise(device_id)
+
+    def _resume_route_cruise(self, params: dict) -> dict:
+        """Resume route cruise."""
+        device_id = params.get("deviceId")
+        if not device_id and self._selected_device:
+            device_id = self._selected_device.id
+
+        if not device_id:
+            return {"success": False, "error": "No device specified"}
+
+        return self.route.resume_route_cruise(device_id)
+
+    async def _reroute_route_cruise(self, params: dict) -> dict:
+        """Reroute and resume route cruise from current position."""
+        device_id = params.get("deviceId")
+        if not device_id and self._selected_device:
+            device_id = self._selected_device.id
+
+        if not device_id:
+            return {"success": False, "error": "No device specified"}
+
+        lat = params.get("lat")
+        lng = params.get("lng")
+        if lat is None or lng is None:
+            return {"success": False, "error": "lat and lng required"}
+
+        return await self.route.reroute_and_resume(
+            device_id, float(lat), float(lng)
+        )
+
+    def _stop_route_cruise(self, params: dict) -> dict:
+        """Stop route cruise."""
+        device_id = params.get("deviceId")
+        if not device_id and self._selected_device:
+            device_id = self._selected_device.id
+
+        if not device_id:
+            return {"success": False, "error": "No device specified"}
+
+        return self.route.stop_route_cruise(device_id)
+
+    def _set_route_cruise_speed(self, params: dict) -> dict:
+        """Set route cruise speed."""
+        device_id = params.get("deviceId")
+        if not device_id and self._selected_device:
+            device_id = self._selected_device.id
+
+        if not device_id:
+            return {"success": False, "error": "No device specified"}
+
+        speed = params.get("speedKmh")
+        if speed is None:
+            return {"success": False, "error": "speedKmh required"}
+
+        return self.route.set_route_speed(device_id, float(speed))
+
+    def _clear_route(self, params: dict) -> dict:
+        """Clear route for a device."""
+        device_id = params.get("deviceId")
+        if not device_id and self._selected_device:
+            device_id = self._selected_device.id
+
+        if not device_id:
+            return {"success": False, "error": "No device specified"}
+
+        return self.route.clear_route(device_id)
+
+    async def _set_route_loop_mode(self, params: dict) -> dict:
+        """Toggle route loop mode."""
+        device_id = params.get("deviceId")
+        if not device_id and self._selected_device:
+            device_id = self._selected_device.id
+
+        if not device_id:
+            return {"success": False, "error": "No device specified"}
+
+        enabled = params.get("enabled")
+        if enabled is None:
+            return {"success": False, "error": "enabled required"}
+
+        return await self.route.set_loop_mode(device_id, bool(enabled))
 
     # =========================================================================
     # HTTP Server
@@ -689,6 +848,8 @@ class LocationSimulatorServer:
         logger.info(f"  GET  /health  - Health check")
         logger.info("=" * 60)
 
+        event_bus.set_loop(asyncio.get_running_loop())
+
         await site.start()
 
         # Keep running until interrupted
@@ -699,9 +860,12 @@ class LocationSimulatorServer:
             pass
         finally:
             await event_bus.close()
-            await self.cruise.stop_all()
+            self.route.stop_all()
+            self.cruise.stop_all()
             await self.port_forward.stop_all()
-            await self.location.close_all_connections()
+            await self.brouter.close()
+            self.location.close_all_connections()
+            self.last_locations.close()
             await runner.cleanup()
             logger.info("HTTP server shutdown")
 
