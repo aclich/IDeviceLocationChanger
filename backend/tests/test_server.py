@@ -210,16 +210,37 @@ class TestClearLocation:
 class TestTunnelOperations:
     """Tests for tunnel-related RPC methods."""
 
-    async def test_start_tunnel_success(self, server):
-        server.tunnel.start_tunnel = MagicMock(return_value={
-            "success": True,
-            "address": "127.0.0.1",
-            "port": 12345,
-            "udid": "device-123",
-        })
-        server.devices.update_tunnel = MagicMock(return_value=True)
+    async def test_retry_tunneld(self, server):
+        """retryTunneld calls ensure_tunneld and returns state."""
+        server.tunnel.ensure_tunneld = MagicMock(return_value="ready")
 
-        # Set up selected device
+        request = {"id": "1", "method": "retryTunneld", "params": {}}
+        response = await server.handle_request(request)
+
+        assert response["result"]["success"] is True
+        assert response["result"]["state"] == "ready"
+        server.tunnel.ensure_tunneld.assert_called_once()
+
+    async def test_retry_tunneld_failure(self, server):
+        """retryTunneld returns failure when tunneld can't start."""
+        server.tunnel.ensure_tunneld = MagicMock(return_value="error")
+
+        request = {"id": "1", "method": "retryTunneld", "params": {}}
+        response = await server.handle_request(request)
+
+        assert response["result"]["success"] is False
+        assert response["result"]["state"] == "error"
+
+    async def test_old_tunnel_methods_removed(self, server):
+        """startTunnel, stopTunnel, getTunnelStatus are no longer available."""
+        for method in ["startTunnel", "stopTunnel", "getTunnelStatus"]:
+            request = {"id": "1", "method": method, "params": {}}
+            response = await server.handle_request(request)
+            assert "error" in response
+            assert response["error"]["code"] == -32601
+
+    async def test_disconnect_device(self, server):
+        """disconnectDevice clears active tasks and selected device."""
         mock_device = Device(
             id="device-123",
             name="Test iPhone",
@@ -227,55 +248,18 @@ class TestTunnelOperations:
             state=DeviceState.CONNECTED,
         )
         server._selected_device = mock_device
+        server.cruise.stop_cruise = MagicMock(return_value={"success": True})
+        server.route.stop_route_cruise = MagicMock(return_value={"success": True})
+        server.location.close_connection = MagicMock()
 
-        request = {"id": "1", "method": "startTunnel", "params": {}}
+        request = {"id": "1", "method": "disconnectDevice", "params": {"deviceId": "device-123"}}
         response = await server.handle_request(request)
 
         assert response["result"]["success"] is True
-        assert response["result"]["address"] == "127.0.0.1"
-        server.devices.update_tunnel.assert_called_once()
-
-    async def test_start_tunnel_failure_no_device(self, server):
-        """startTunnel without device or UDID returns error."""
-        request = {"id": "1", "method": "startTunnel", "params": {}}
-        response = await server.handle_request(request)
-
-        assert response["result"]["success"] is False
-        assert "no device" in response["result"]["error"].lower()
-
-    async def test_start_tunnel_failure_with_udid(self, server):
-        """startTunnel with UDID but tunnel fails."""
-        server.tunnel.start_tunnel = MagicMock(return_value={
-            "success": False,
-            "error": "No device connected",
-        })
-
-        request = {"id": "1", "method": "startTunnel", "params": {"udid": "test-device"}}
-        response = await server.handle_request(request)
-
-        assert response["result"]["success"] is False
-        assert "No device connected" in response["result"]["error"]
-
-    async def test_stop_tunnel(self, server):
-        server.tunnel.stop_tunnel = MagicMock(return_value={"success": True})
-
-        request = {"id": "1", "method": "stopTunnel", "params": {}}
-        response = await server.handle_request(request)
-
-        assert response["result"]["success"] is True
-
-    async def test_get_tunnel_status(self, server):
-        server.tunnel.get_status = MagicMock(return_value={
-            "running": True,
-            "address": "127.0.0.1",
-            "port": 12345,
-        })
-
-        request = {"id": "1", "method": "getTunnelStatus", "params": {}}
-        response = await server.handle_request(request)
-
-        assert response["result"]["running"] is True
-        assert response["result"]["address"] == "127.0.0.1"
+        assert server._selected_device is None
+        server.cruise.stop_cruise.assert_called_once_with("device-123")
+        server.route.stop_route_cruise.assert_called_once_with("device-123")
+        server.location.close_connection.assert_called_once_with("device-123")
 
 
 class TestFavoritesOperations:

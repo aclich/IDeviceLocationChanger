@@ -30,7 +30,8 @@ export function useBackend() {
   const [devices, setDevices] = useState([]);
   const [selectedDevice, setSelectedDevice] = useState(null);
   const [location, setLocation] = useState(null);
-  const [tunnelStatus, setTunnelStatus] = useState({ running: false });
+  const [tunnelStatus, setTunnelStatus] = useState(null); // { status, address?, port? } from enriched selectDevice
+  const [tunneldState, setTunneldState] = useState({ state: 'starting' }); // tunneld daemon: starting, ready, error
   const [cruiseStatus, setCruiseStatus] = useState(null); // { state, location, target, speedKmh, remainingKm }
   const [routeStatus, setRouteStatus] = useState(null); // Route cruise session state
   const [routeState, setRouteState] = useState(null); // Route waypoints, segments, loop mode
@@ -84,6 +85,27 @@ export function useBackend() {
 
         case 'error':
           setError(message.data?.message || 'Unknown error');
+          break;
+
+        // Tunneld daemon events
+        case 'tunneldStatus':
+          setTunneldState(message.data);
+          break;
+
+        case 'tunnelStatusChanged':
+          // Update tunnel status if it's for the currently selected device
+          if (message.data?.udid) {
+            setTunnelStatus(prev => {
+              // Only update if this event is for the selected device
+              // (will be checked against selectedDevice in the component)
+              return {
+                status: message.data.status,
+                address: message.data.address,
+                port: message.data.port,
+                udid: message.data.udid,
+              };
+            });
+          }
           break;
 
         // Cruise events
@@ -223,6 +245,8 @@ export function useBackend() {
     const response = await sendRequest('selectDevice', { deviceId });
     if (response.result?.device) {
       setSelectedDevice(response.result.device);
+      // Extract tunnel info from enriched response
+      setTunnelStatus(response.result.tunnel || null);
       logger.info('Device selected:', response.result.device.name);
     } else if (response.error) {
       setError(response.error.message);
@@ -288,51 +312,23 @@ export function useBackend() {
   // Tunnel Operations
   // =========================================================================
 
-  const startTunnel = useCallback(async (udid = null) => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const params = udid ? { udid } : {};
-      const response = await sendRequest('startTunnel', params);
-      if (response.result) {
-        if (response.result.success) {
-          // Map backend response to frontend tunnelStatus format
-          setTunnelStatus({
-            running: true,
-            address: response.result.address,
-            port: response.result.port,
-            udid: response.result.udid,
-          });
-          logger.info(`Tunnel started: ${response.result.address}:${response.result.port}`);
-        } else {
-          setTunnelStatus({ running: false, message: response.result.error });
-          setError(response.result.error || 'Failed to start tunnel');
-        }
-      }
-      if (response.error) {
-        setError(response.error.message);
-      }
-      return response;
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  const stopTunnel = useCallback(async (udid = null) => {
-    const params = udid ? { udid } : {};
-    const response = await sendRequest('stopTunnel', params);
-    if (response.result?.success) {
-      setTunnelStatus({ running: false, status: 'no_tunnel' });
-      logger.info('Tunnel stopped');
-    }
+  const retryTunneld = useCallback(async () => {
+    setTunneldState({ state: 'starting' });
+    const response = await sendRequest('retryTunneld');
+    // SSE events will update tunneldState
     return response;
   }, []);
 
-  const getTunnelStatus = useCallback(async (udid = null) => {
-    const params = udid ? { udid } : {};
-    const response = await sendRequest('getTunnelStatus', params);
-    if (response.result) {
-      setTunnelStatus(response.result);
+  const disconnectDevice = useCallback(async (deviceId) => {
+    const response = await sendRequest('disconnectDevice', { deviceId });
+    if (response.result?.success) {
+      setSelectedDevice(null);
+      setLocation(null);
+      setTunnelStatus(null);
+      setCruiseStatus(null);
+      setRouteStatus(null);
+      setRouteState(null);
+      logger.info('Device disconnected');
     }
     return response;
   }, []);
@@ -576,6 +572,7 @@ export function useBackend() {
     selectedDevice,
     location,
     tunnelStatus,
+    tunneldState,
     cruiseStatus,
     error,
     isLoading,
@@ -585,6 +582,7 @@ export function useBackend() {
     // Device actions
     listDevices,
     selectDevice,
+    disconnectDevice,
 
     // Location actions
     setLocation: setLocationOnDevice,
@@ -592,9 +590,7 @@ export function useBackend() {
     getLastLocation,
 
     // Tunnel actions
-    startTunnel,
-    stopTunnel,
-    getTunnelStatus,
+    retryTunneld,
 
     // Cruise actions
     startCruise,

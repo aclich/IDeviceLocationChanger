@@ -187,32 +187,11 @@ class BackendClient {
         this.reconnectAttempts = 0;
       };
 
-      // Handle named events (matches event: <name> in SSE)
-      this.eventSource.addEventListener('connected', (event) => {
-        logger.debug('SSE connection confirmed by server');
-      });
-
-      // Handle message events (default event type)
+      // All events come through onmessage (no named SSE events).
+      // Event type is in the JSON payload (data.event), parsed by _handleSSEMessage.
       this.eventSource.onmessage = (event) => {
         this._handleSSEMessage(event);
       };
-
-      // Also listen for specific event types that might be sent
-      const eventTypes = [
-        'cruiseStarted',
-        'cruiseUpdate',
-        'cruiseArrived',
-        'cruiseStopped',
-        'cruisePaused',
-        'cruiseResumed',
-        'cruiseError',
-      ];
-
-      eventTypes.forEach((eventType) => {
-        this.eventSource.addEventListener(eventType, (event) => {
-          this._handleSSEMessage(event);
-        });
-      });
 
       this.eventSource.onerror = (error) => {
         logger.warn('SSE error:', error);

@@ -19,6 +19,7 @@ import asyncio
 import inspect
 import logging
 import argparse
+import threading
 from datetime import datetime
 from typing import Optional
 
@@ -61,6 +62,12 @@ class LocationSimulatorServer:
         # This allows LocationService to get fresh tunnel info on connection errors
         self.location.set_tunnel_provider(self._get_tunnel_for_device)
 
+        # Wire up tunnel event emitter for SSE
+        self.tunnel.set_event_emitter(self._emit_event)
+
+        # Start tunneld check in background (non-blocking)
+        threading.Thread(target=self.tunnel.ensure_tunneld, daemon=True).start()
+
         # Wire up cruise service callbacks
         self.cruise.set_location_callback(self._set_location_for_cruise)
         self.cruise.set_event_emitter(self._emit_event)
@@ -78,9 +85,8 @@ class LocationSimulatorServer:
             "selectDevice": self._select_device,
             "setLocation": self._set_location,
             "clearLocation": self._clear_location,
-            "startTunnel": self._start_tunnel,
-            "stopTunnel": self._stop_tunnel,
-            "getTunnelStatus": self._get_tunnel_status,
+            "retryTunneld": self._retry_tunneld,
+            "disconnectDevice": self._disconnect_device,
             # Favorites
             "getFavorites": self._get_favorites,
             "addFavorite": self._add_favorite,
@@ -121,8 +127,31 @@ class LocationSimulatorServer:
         """Tunnel provider callback for LocationService retry mechanism.
 
         Queries tunneld for fresh tunnel info. Sync — TunnelManager is sync.
+        Emits tunnelStatusChanged SSE if status changed.
         """
-        return self.tunnel.get_tunnel(udid)
+        # Snapshot previous state
+        prev_state = self.tunnel._last_status.get(udid)
+        prev_tunnel = prev_state.tunnel_info if prev_state else None
+
+        tunnel = self.tunnel.get_tunnel(udid)
+
+        # Check if status changed and emit SSE
+        changed = False
+        if tunnel and not prev_tunnel:
+            changed = True
+        elif not tunnel and prev_tunnel:
+            changed = True
+        elif tunnel and prev_tunnel and (tunnel.address != prev_tunnel.address or tunnel.port != prev_tunnel.port):
+            changed = True
+
+        if changed:
+            if tunnel:
+                event_data = {"udid": udid, "status": "connected", "address": tunnel.address, "port": tunnel.port}
+            else:
+                event_data = {"udid": udid, "status": "no_tunnel"}
+            event_bus.publish_sync({"event": "tunnelStatusChanged", "data": event_data})
+
+        return tunnel
 
     def _emit_event(self, event: dict) -> None:
         """Emit an event to all SSE subscribers.
@@ -164,8 +193,8 @@ class LocationSimulatorServer:
 
     # Methods that do blocking I/O and need run_in_executor
     _BLOCKING_METHODS = {
-        "listDevices", "setLocation", "clearLocation",
-        "startTunnel", "stopTunnel",
+        "listDevices", "selectDevice", "setLocation", "clearLocation",
+        "retryTunneld", "disconnectDevice",
         "startCruise", "stopCruise", "pauseCruise", "resumeCruise",
         "startRouteCruise", "stopRouteCruise", "pauseRouteCruise", "resumeRouteCruise",
     }
@@ -213,12 +242,22 @@ class LocationSimulatorServer:
     # =========================================================================
 
     def _list_devices(self, params: dict) -> dict:
-        """List all connected devices."""
+        """List all connected devices with tunnel info for physical devices."""
         devices = self.devices.list_devices()
-        return {"devices": [d.to_dict() for d in devices]}
+        device_list = []
+        for d in devices:
+            d_dict = d.to_dict()
+            tunnel_info = self._get_tunnel_info_for_device(d)
+            if tunnel_info is not None:
+                d_dict["tunnel"] = tunnel_info
+            device_list.append(d_dict)
+        return {"devices": device_list}
 
     def _select_device(self, params: dict) -> dict:
-        """Select a device for location simulation."""
+        """Select a device for location simulation.
+
+        Enriches response with tunnel info for physical devices.
+        """
         device_id = params.get("deviceId")
         if not device_id:
             return {"success": False, "error": "deviceId required"}
@@ -228,7 +267,13 @@ class LocationSimulatorServer:
             return {"success": False, "error": f"Device not found: {device_id}"}
 
         self._selected_device = device
-        return {"success": True, "device": device.to_dict()}
+        result = {"success": True, "device": device.to_dict()}
+
+        tunnel_info = self._get_tunnel_info_for_device(device)
+        if tunnel_info is not None:
+            result["tunnel"] = tunnel_info
+
+        return result
 
     def _set_location(self, params: dict) -> dict:
         """Set location on selected device.
@@ -290,48 +335,63 @@ class LocationSimulatorServer:
 
         return result
 
-    def _start_tunnel(self, params: dict) -> dict:
-        """Start RSD tunnel for iOS 17+ devices."""
-        # Get UDID from params or selected device
-        udid = params.get("udid")
-        if not udid and self._selected_device:
-            udid = self._selected_device.id
+    def _retry_tunneld(self, params: dict) -> dict:
+        """Retry starting tunneld daemon. Called from error banner retry button."""
+        state = self.tunnel.ensure_tunneld()
+        return {"success": state == "ready", "state": state}
 
-        if not udid:
-            return {"success": False, "error": "No device specified. Select a device first."}
+    def _get_tunnel_info_for_device(self, device: Device) -> Optional[dict]:
+        """Query tunneld for a device's tunnel info.
 
-        result = self.tunnel.start_tunnel(udid)
+        Returns tunnel info dict for physical devices, None for simulators.
+        Handles three states: connected, no_tunnel, tunneld_not_running.
 
-        # Update device with tunnel info on success
-        if result.get("success") and result.get("address"):
-            tunnel = RSDTunnel(
-                address=result["address"],
-                port=result["port"],
-                udid=udid
-            )
-            self.devices.update_tunnel(udid, tunnel)
-            # Also update selected device if it's the same one
-            if self._selected_device and self._selected_device.id == udid:
-                self._selected_device.rsd_tunnel = tunnel
-                logger.info(f"Updated selected device with tunnel: {tunnel.address}:{tunnel.port}")
+        Also syncs global tunneldState — if tunneld went down or came back
+        since the last check, emits a tunneldStatus SSE event so the
+        frontend can show/hide the error banner.
+        """
+        if device.type == DeviceType.SIMULATOR:
+            return None
 
-        return result
+        running = self.tunnel._is_tunneld_running()
+        prev_state = self.tunnel._tunneld_state
 
-    def _stop_tunnel(self, params: dict) -> dict:
-        """Stop RSD tunnel for device or all tunnels."""
-        udid = params.get("udid")
-        # If no UDID specified and we have a selected device, use that
-        if not udid and self._selected_device:
-            udid = self._selected_device.id
-        return self.tunnel.stop_tunnel(udid)
+        if not running:
+            if prev_state != "error":
+                self.tunnel._emit_tunneld_status("error", "tunneld stopped unexpectedly")
+            return {"status": "tunneld_not_running"}
 
-    def _get_tunnel_status(self, params: dict) -> dict:
-        """Get current tunnel status."""
-        udid = params.get("udid")
-        # If no UDID specified and we have a selected device, use that
-        if not udid and self._selected_device:
-            udid = self._selected_device.id
-        return self.tunnel.get_status(udid)
+        # tunneld is running — sync state if it recovered
+        if prev_state != "ready":
+            self.tunnel._emit_tunneld_status("ready")
+
+        tunnel = self.tunnel.get_tunnel(device.id)
+        if tunnel:
+            return {
+                "status": "connected",
+                "address": tunnel.address,
+                "port": tunnel.port,
+            }
+        return {"status": "no_tunnel"}
+
+    def _disconnect_device(self, params: dict) -> dict:
+        """Disconnect a device — stop all active tasks and clear state."""
+        device_id = params.get("deviceId")
+        if not device_id:
+            return {"success": False, "error": "deviceId required"}
+
+        # Stop cruise if active
+        self.cruise.stop_cruise(device_id)
+        # Stop route cruise if active
+        self.route.stop_route_cruise(device_id)
+        # Close location connection
+        self.location.close_connection(device_id)
+        # Clear selected device if it matches
+        if self._selected_device and self._selected_device.id == device_id:
+            self._selected_device = None
+
+        logger.info(f"Device {device_id[:8]} disconnected")
+        return {"success": True}
 
     # =========================================================================
     # Favorites Operations
@@ -793,22 +853,33 @@ class LocationSimulatorServer:
             
             try:
                 # Send initial connection event
+                # Note: no "event:" field — all events go through onmessage
+                # so the frontend doesn't need per-event-type addEventListener
                 await response.write(
-                    f"event: connected\ndata: {json.dumps({'status': 'connected'})}\n\n".encode()
+                    f"data: {json.dumps({'event': 'connected', 'data': {'status': 'connected'}})}\n\n".encode()
                 )
-                
+
+                # Send current tunneld state so client doesn't stay stuck on "starting"
+                # (the background thread may have finished before any SSE client connected)
+                tunneld_data = {"state": self.tunnel._tunneld_state}
+                if self.tunnel._tunneld_error:
+                    tunneld_data["error"] = self.tunnel._tunneld_error
+                await response.write(
+                    f"data: {json.dumps({'event': 'tunneldStatus', 'data': tunneld_data})}\n\n".encode()
+                )
+
                 # Subscribe to event bus and stream events
                 async for event in event_bus.subscribe():
                     if event is None:
                         # Shutdown signal
                         break
-                    
-                    # Format as SSE: event: <name>\ndata: <json>\n\n
-                    event_name = event.get("event", "message")
-                    event_data = json.dumps(event)
-                    sse_message = f"event: {event_name}\ndata: {event_data}\n\n"
-                    
-                    await response.write(sse_message.encode())
+
+                    # Format as SSE: data-only (no event: field)
+                    # Event name is in the JSON payload (event.event)
+                    # This ensures all events go through onmessage
+                    await response.write(
+                        f"data: {json.dumps(event)}\n\n".encode()
+                    )
                     
             except asyncio.CancelledError:
                 logger.debug("SSE connection cancelled")

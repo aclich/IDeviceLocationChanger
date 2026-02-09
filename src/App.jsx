@@ -20,6 +20,7 @@ function App() {
     selectedDevice,
     location,
     tunnelStatus,
+    tunneldState,
     cruiseStatus,
     error,
     isLoading,
@@ -27,11 +28,11 @@ function App() {
     isBrowserMode,
     listDevices,
     selectDevice: selectDeviceRaw,
+    disconnectDevice,
     setLocation,
     clearLocation,
     getLastLocation,
-    startTunnel,
-    stopTunnel,
+    retryTunneld,
     clearError,
     // Cruise operations (run in backend)
     startCruise: backendStartCruise,
@@ -320,11 +321,12 @@ function App() {
               devices={devices}
               selectedDevice={selectedDevice}
               onSelectDevice={selectDevice}
+              onDisconnectDevice={disconnectDevice}
               onRefresh={listDevices}
               isLoading={isLoading}
               tunnelStatus={tunnelStatus}
-              onStartTunnel={startTunnel}
-              onStopTunnel={stopTunnel}
+              tunneldState={tunneldState}
+              onRetryTunneld={retryTunneld}
             />
 
             <ControlPanel

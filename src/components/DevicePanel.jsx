@@ -1,24 +1,15 @@
 import { useEffect } from 'react';
 
-// Tunnel status constants matching backend TunnelStatus enum
-const TUNNEL_STATUS = {
-  NO_TUNNEL: 'no_tunnel',
-  DISCOVERING: 'discovering',
-  CONNECTED: 'connected',
-  STALE: 'stale',
-  DISCONNECTED: 'disconnected',
-  ERROR: 'error',
-};
-
 export function DevicePanel({
   devices,
   selectedDevice,
   onSelectDevice,
+  onDisconnectDevice,
   onRefresh,
   isLoading,
   tunnelStatus,
-  onStartTunnel,
-  onStopTunnel,
+  tunneldState,
+  onRetryTunneld,
 }) {
   // Auto-refresh devices on mount
   useEffect(() => {
@@ -36,74 +27,59 @@ export function DevicePanel({
     return `${device.productName || device.productType || 'Physical'} (${device.connectionType})`;
   };
 
-  // Get address and port from tunnelStatus (handles both legacy and new formats)
-  const getAddressPort = () => {
-    // New format: tunnelInfo is nested object
-    if (tunnelStatus.tunnelInfo) {
-      return {
-        address: tunnelStatus.tunnelInfo.address,
-        port: tunnelStatus.tunnelInfo.port,
-      };
-    }
-    // Legacy format: address and port at top level
-    return {
-      address: tunnelStatus.address,
-      port: tunnelStatus.port,
-    };
-  };
-
-  // Get tunnel status display info
+  // Get tunnel status display info for the selected device
   const getTunnelStatusInfo = () => {
-    const status = tunnelStatus.status || (tunnelStatus.running ? TUNNEL_STATUS.CONNECTED : TUNNEL_STATUS.NO_TUNNEL);
-    const { address, port } = getAddressPort();
+    if (!tunnelStatus) return null;
 
-    switch (status) {
-      case TUNNEL_STATUS.CONNECTED:
+    switch (tunnelStatus.status) {
+      case 'connected':
         return {
-          className: 'active',
-          text: address && port ? `Connected (${address}:${port})` : 'Connected',
+          text: tunnelStatus.address && tunnelStatus.port
+            ? `Connected (${tunnelStatus.address} ${tunnelStatus.port})`
+            : 'Connected',
           color: '#4ade80', // green
         };
-      case TUNNEL_STATUS.DISCOVERING:
+      case 'no_tunnel':
         return {
-          className: 'discovering',
-          text: 'Discovering...',
-          color: '#fbbf24', // yellow
-        };
-      case TUNNEL_STATUS.STALE:
-        return {
-          className: 'stale',
-          text: 'Reconnecting...',
-          color: '#fbbf24', // yellow
-        };
-      case TUNNEL_STATUS.DISCONNECTED:
-        return {
-          className: 'disconnected',
-          text: tunnelStatus.error || 'Disconnected',
-          color: '#f87171', // red
-        };
-      case TUNNEL_STATUS.ERROR:
-        return {
-          className: 'error',
-          text: tunnelStatus.error || 'Error',
-          color: '#f87171', // red
-        };
-      case TUNNEL_STATUS.NO_TUNNEL:
-      default:
-        return {
-          className: '',
-          text: tunnelStatus.message || 'Not started',
+          text: 'No tunnel',
           color: '#6b7280', // gray
         };
+      case 'tunneld_not_running':
+        return {
+          text: 'tunneld not running',
+          color: '#f87171', // red
+        };
+      default:
+        return null;
     }
   };
 
-  const statusInfo = getTunnelStatusInfo();
-  const isConnected = tunnelStatus.status === TUNNEL_STATUS.CONNECTED ||
-    (tunnelStatus.running && !tunnelStatus.status);
+  const handleDisconnect = (e, device) => {
+    e.stopPropagation(); // Don't trigger device selection
+    if (window.confirm(`This will disconnect location simulation for ${device.name}. Continue?`)) {
+      onDisconnectDevice(device.id);
+    }
+  };
+
+  const tunnelInfo = getTunnelStatusInfo();
+  const showTunnelStatus = selectedDevice && selectedDevice.type !== 'simulator' && tunnelInfo;
 
   return (
     <div className="device-panel">
+      {/* Tunneld error/starting banner */}
+      {tunneldState?.state === 'error' && (
+        <div className="tunneld-banner tunneld-error">
+          <span>tunneld not running. Physical iOS 17+ devices won't work.</span>
+          <button className="btn btn-small" onClick={onRetryTunneld}>Retry</button>
+        </div>
+      )}
+      {tunneldState?.state === 'starting' && (
+        <div className="tunneld-banner tunneld-starting">
+          <span>Starting tunneld...</span>
+          <span className="spinner">⏳</span>
+        </div>
+      )}
+
       <div className="panel-header">
         <h3>Devices</h3>
         <button onClick={onRefresh} disabled={isLoading} className="btn-icon">
@@ -117,46 +93,47 @@ export function DevicePanel({
             {isLoading ? 'Scanning...' : 'No devices found'}
           </div>
         ) : (
-          devices.map((device) => (
-            <div
-              key={device.id}
-              className={`device-item ${selectedDevice?.id === device.id ? 'selected' : ''}`}
-              onClick={() => onSelectDevice(device.id)}
-            >
-              <span className="device-icon">{getDeviceIcon(device)}</span>
-              <div className="device-info">
-                <div className="device-name">{device.name}</div>
-                <div className="device-subtitle">{getDeviceSubtitle(device)}</div>
+          devices.map((device) => {
+            const isSelected = selectedDevice?.id === device.id;
+            return (
+              <div
+                key={device.id}
+                className={`device-item ${isSelected ? 'selected' : ''}`}
+                onClick={() => onSelectDevice(device.id)}
+              >
+                <span className="device-icon">{getDeviceIcon(device)}</span>
+                <div className="device-info">
+                  <div className="device-name">{device.name}</div>
+                  <div className="device-subtitle">{getDeviceSubtitle(device)}</div>
+                </div>
+                {isSelected && (
+                  <button
+                    className="btn-disconnect"
+                    onClick={(e) => handleDisconnect(e, device)}
+                    title="Disconnect device"
+                  >
+                    ✕
+                  </button>
+                )}
               </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
 
-      <div className="tunnel-section">
-        <div className="panel-header">
-          <h4>iOS 17+ Tunnel</h4>
+      {/* Read-only tunnel status (only for physical devices) */}
+      {showTunnelStatus && (
+        <div className="tunnel-section">
+          <div className="tunnel-status">
+            <span className="tunnel-label">Tunnel</span>
+            <span
+              className="status-dot"
+              style={{ backgroundColor: tunnelInfo.color }}
+            />
+            <span className="status-text">{tunnelInfo.text}</span>
+          </div>
         </div>
-        <div className="tunnel-status">
-          <span
-            className={`status-dot ${statusInfo.className}`}
-            style={{ backgroundColor: statusInfo.color }}
-          />
-          <span className="status-text">{statusInfo.text}</span>
-        </div>
-        <div className="tunnel-buttons">
-          <button
-            className={`btn ${isConnected ? 'btn-danger' : 'btn-primary'}`}
-            onClick={isConnected ? () => onStopTunnel(selectedDevice?.id) : () => onStartTunnel(selectedDevice?.id)}
-            disabled={isLoading}
-          >
-            {isConnected ? 'Stop Tunnel' : `Start Tunnel${selectedDevice ? ` (${selectedDevice.name})` : ''}`}
-          </button>
-        </div>
-        {!selectedDevice && !isConnected && (
-          <div className="tunnel-hint">Select a device first, or start tunnel for all devices</div>
-        )}
-      </div>
+      )}
     </div>
   );
 }

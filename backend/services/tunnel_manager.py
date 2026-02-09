@@ -11,8 +11,9 @@ import re
 import subprocess
 import sys
 import time
+import threading
 import urllib.request
-from typing import Optional
+from typing import Callable, Optional
 
 from models import RSDTunnel, TunnelState, TunnelStatus
 
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Default tunneld port
 TUNNELD_DEFAULT_PORT = 49151
+TUNNELD_QUERY_TIMEOUT = 10  # seconds
 
 
 class TunnelManager:
@@ -35,6 +37,108 @@ class TunnelManager:
         self._last_status: dict[str, TunnelState] = {}
         # Track last error for UI display
         self._last_error: Optional[str] = None
+        # Tunneld daemon state: "starting", "ready", or "error"
+        self._tunneld_state: str = "starting"
+        self._tunneld_error: Optional[str] = None
+        # Event emitter callback for SSE (set by main.py)
+        self._event_emitter: Optional[Callable[[dict], None]] = None
+
+    def set_event_emitter(self, emitter: Callable[[dict], None]) -> None:
+        """Set the event emitter callback for SSE events."""
+        self._event_emitter = emitter
+
+    def _emit_tunneld_status(self, state: str, error: str = None) -> None:
+        """Emit tunneldStatus SSE event."""
+        self._tunneld_state = state
+        self._tunneld_error = error
+        if self._event_emitter:
+            event = {"event": "tunneldStatus", "data": {"state": state}}
+            if error:
+                event["data"]["error"] = error
+            self._event_emitter(event)
+
+    def ensure_tunneld(self) -> str:
+        """Check if tunneld is running, start it if not.
+
+        Returns the final state: "ready" or "error".
+        Emits tunneldStatus SSE events for state transitions.
+        """
+        self._emit_tunneld_status("starting")
+
+        if self._is_tunneld_running():
+            logger.info("tunneld is already running")
+            self._emit_tunneld_status("ready")
+            return "ready"
+
+        logger.info("tunneld is not running, attempting to start...")
+        python_path = self._find_python_with_pymobiledevice3()
+
+        if sys.platform == "darwin":
+            result = self._start_tunneld_daemon_macos(python_path)
+        elif sys.platform == "linux":
+            result = self._start_tunneld_daemon_linux(python_path)
+        else:
+            self._emit_tunneld_status("error", f"Unsupported platform: {sys.platform}")
+            return "error"
+
+        if result:
+            self._emit_tunneld_status("ready")
+            return "ready"
+        else:
+            error_msg = self._last_error or "Failed to start tunneld"
+            self._emit_tunneld_status("error", error_msg)
+            return "error"
+
+    def _start_tunneld_daemon_macos(self, python_path: str) -> bool:
+        """Start tunneld daemon on macOS. Returns True on success."""
+        script = f'''
+        do shell script "{python_path} -m pymobiledevice3 remote tunneld -d > /tmp/tunneld.log 2>&1 &" with administrator privileges
+        '''
+        try:
+            logger.info("Requesting admin privileges for tunneld...")
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True, text=True, timeout=60
+            )
+            if result.returncode != 0:
+                stderr = result.stderr or result.stdout
+                if "User canceled" in stderr:
+                    self._last_error = "Admin authentication cancelled"
+                    return False
+                logger.warning(f"tunneld returned: {stderr}")
+
+            # Wait for tunneld to become responsive
+            time.sleep(2)
+            for _ in range(26):  # ~13 seconds
+                if self._is_tunneld_running():
+                    return True
+                time.sleep(0.5)
+            self._last_error = "Tunnel did not become available"
+            return False
+        except subprocess.TimeoutExpired:
+            self._last_error = "Timeout waiting for admin authentication"
+            return False
+        except Exception as e:
+            self._last_error = str(e)
+            return False
+
+    def _start_tunneld_daemon_linux(self, python_path: str) -> bool:
+        """Start tunneld daemon on Linux. Returns True on success."""
+        try:
+            subprocess.Popen(
+                ["pkexec", python_path, "-m", "pymobiledevice3", "remote", "tunneld", "-d"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            time.sleep(2)
+            for _ in range(16):  # ~8 seconds
+                if self._is_tunneld_running():
+                    return True
+                time.sleep(0.5)
+            self._last_error = "Tunnel did not become available"
+            return False
+        except Exception as e:
+            self._last_error = str(e)
+            return False
 
     # =========================================================================
     # Public API
@@ -226,7 +330,7 @@ class TunnelManager:
             req = urllib.request.Request(url, method='GET')
             req.add_header('Accept', 'application/json')
 
-            with urllib.request.urlopen(req, timeout=2) as response:
+            with urllib.request.urlopen(req, timeout=TUNNELD_QUERY_TIMEOUT) as response:
                 response_text = response.read().decode('utf-8')
 
             data = json.loads(response_text)
@@ -276,12 +380,13 @@ class TunnelManager:
         return None
 
     def _is_tunneld_running(self) -> bool:
-        """Check if tunneld HTTP API is responding."""
+        """Check if tunneld process is running via ps."""
         try:
-            url = f"http://127.0.0.1:{TUNNELD_DEFAULT_PORT}/"
-            req = urllib.request.Request(url, method='GET')
-            with urllib.request.urlopen(req, timeout=1):
-                return True
+            result = subprocess.run(
+                ["pgrep", "-f", "pymobiledevice3.*tunneld"],
+                capture_output=True, text=True, timeout=5
+            )
+            return result.returncode == 0
         except Exception:
             return False
 
