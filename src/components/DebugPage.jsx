@@ -4,6 +4,7 @@ export function DebugPage() {
   const [input, setInput] = useState('{"method": "listDevices", "params": {}}');
   const [outputs, setOutputs] = useState([]);
   const [logs, setLogs] = useState([]);
+  const [logLimit, setLogLimit] = useState(100);
   const [isConnected, setIsConnected] = useState(false);
   const outputRef = useRef(null);
   const logRef = useRef(null);
@@ -82,20 +83,22 @@ export function DebugPage() {
 
     const cleanup = window.backend.onEvent((message) => {
       const timestamp = new Date().toLocaleTimeString();
-      setLogs(prev => [...prev, {
-        time: timestamp,
-        type: 'event',
-        content: message
-      }]);
+      setLogs(prev => {
+        const trimmed = prev.length >= logLimit ? prev.slice(-(logLimit - 1)) : prev;
+        return [...trimmed, { time: timestamp, type: 'event', content: message }];
+      });
     });
 
     return cleanup;
-  }, []);
+  }, [logLimit]);
 
   const addLog = useCallback((type, content) => {
     const timestamp = new Date().toLocaleTimeString();
-    setLogs(prev => [...prev, { time: timestamp, type, content }]);
-  }, []);
+    setLogs(prev => {
+      const trimmed = prev.length >= logLimit ? prev.slice(-(logLimit - 1)) : prev;
+      return [...trimmed, { time: timestamp, type, content }];
+    });
+  }, [logLimit]);
 
   const handleSend = useCallback(async () => {
     if (!window.backend) {
@@ -444,7 +447,20 @@ export function DebugPage() {
       <div className="debug-log-section">
         <div className="section-header">
           <label>Logs & Events:</label>
-          <button className="clear-btn" onClick={clearLogs}>Clear</button>
+          <div className="log-controls">
+            <button className="clear-btn" onClick={clearLogs}>Clear</button>
+            <label className="log-limit-label">Limit:</label>
+            <input
+              type="number"
+              className="log-limit-input"
+              value={logLimit}
+              min={1}
+              onChange={(e) => {
+                const val = parseInt(e.target.value, 10);
+                if (val > 0) setLogLimit(val);
+              }}
+            />
+          </div>
         </div>
         <div className="debug-log" ref={logRef}>
           {logs.length === 0 ? (

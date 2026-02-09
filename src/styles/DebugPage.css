@@ -369,6 +369,29 @@
   color: #fff;
 }
 
+.log-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.log-limit-label {
+  font-size: 11px;
+  color: #888;
+  text-transform: none !important;
+}
+
+.log-limit-input {
+  width: 60px;
+  padding: 3px 6px;
+  background: #1a1a2e;
+  border: 1px solid #444;
+  border-radius: 4px;
+  color: #ccc;
+  font-size: 11px;
+  text-align: center;
+}
+
 /* Output Section */
 .debug-output-section {
   display: flex;
