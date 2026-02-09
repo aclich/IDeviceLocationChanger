@@ -27,7 +27,8 @@ from enum import Enum
 from typing import Optional, Callable
 
 from .coordinate_utils import distance_between
-from .cruise_service import CruiseService
+from .cruise_service import CruiseService, arrival_threshold_km
+from .brouter_service import BrouterService
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,10 @@ class RouteSession:
     segments_completed: int = 0
     loops_completed: int = 0
 
+    # Bridge cruise: smooth transition between segment endpoints
+    bridge_from: Optional[list[float]] = None  # [lat, lng] — last point of completed segment
+    is_bridging: bool = False  # True during a bridge cruise
+
     # Reroute state (temporary path from joystick/direct position to next waypoint)
     reroute_path: Optional[list[list[float]]] = None
     reroute_step: int = 0
@@ -172,7 +177,7 @@ class RouteService:
     cruise orchestration methods are sync (CruiseService is sync).
     """
 
-    def __init__(self, cruise_service: CruiseService, brouter_service):
+    def __init__(self, cruise_service: CruiseService, brouter_service: BrouterService):
         self._cruise_service = cruise_service
         self._brouter_service = brouter_service
 
@@ -596,6 +601,7 @@ class RouteService:
 
             if step >= len(path) - 1:
                 # Reroute complete, advance to next segment
+                session.bridge_from = path[-1]
                 session.reroute_path = None
                 session.reroute_step = 0
                 session.current_segment_index += 1
@@ -616,7 +622,7 @@ class RouteService:
             dist = distance_between(
                 current_pt[0], current_pt[1], next_pt[0], next_pt[1]
             )
-            if dist < 0.005:
+            if dist < arrival_threshold_km(session.speed_kmh):
                 session.reroute_step += 1
                 self._start_next_point_pair(session)
                 return
@@ -636,6 +642,7 @@ class RouteService:
         # Check if all segments are traversed
         if session.current_segment_index >= len(segments):
             if session.route.loop_mode:
+                session.bridge_from = segments[-1].path[-1]
                 session.current_segment_index = 0
                 session.current_step_in_segment = 0
                 session.loops_completed += 1
@@ -660,12 +667,33 @@ class RouteService:
                 self._emit("routeArrived", session.to_dict())
                 return
 
+        # Bridge cruise: smooth transition between segment endpoints
+        if session.bridge_from is not None:
+            bridge_from = session.bridge_from
+            session.bridge_from = None
+
+            seg = segments[session.current_segment_index]
+            bridge_to = seg.path[0]
+            gap = distance_between(bridge_from[0], bridge_from[1], bridge_to[0], bridge_to[1])
+
+            if gap >= arrival_threshold_km(session.speed_kmh):
+                session.is_bridging = True
+                self._cruise_service.start_cruise(
+                    device_id=session.device_id,
+                    start_lat=bridge_from[0], start_lon=bridge_from[1],
+                    target_lat=bridge_to[0], target_lon=bridge_to[1],
+                    speed_kmh=session.speed_kmh,
+                )
+                return
+            # Gap < 5m — fall through to normal processing
+
         segment = segments[session.current_segment_index]
-        path = segment.path
+        coordinates = segment.path
         step = session.current_step_in_segment
 
-        if step >= len(path) - 1:
+        if step >= len(coordinates) - 1:
             # Segment polyline exhausted, advance to next segment
+            session.bridge_from = coordinates[-1]
             session.current_segment_index += 1
             session.current_step_in_segment = 0
             session.segments_completed += 1
@@ -678,14 +706,14 @@ class RouteService:
             return
 
         # Feed point pair to CruiseService
-        current_pt = path[step]
-        next_pt = path[step + 1]
+        current_pt = coordinates[step]
+        next_pt = coordinates[step + 1]
 
         # Skip pairs closer than arrival threshold (5m) - auto-advance
         dist = distance_between(
             current_pt[0], current_pt[1], next_pt[0], next_pt[1]
         )
-        if dist < 0.005:
+        if dist < arrival_threshold_km(session.speed_kmh):
             session.current_step_in_segment += 1
             self._start_next_point_pair(session)
             return
@@ -713,7 +741,10 @@ class RouteService:
         )
 
         # Advance to next point in reroute or normal path
-        if session.reroute_path is not None:
+        if session.is_bridging:
+            session.is_bridging = False
+            # Bridge done — don't advance step; normal processing starts from step 0
+        elif session.reroute_path is not None:
             session.reroute_step += 1
         else:
             session.current_step_in_segment += 1

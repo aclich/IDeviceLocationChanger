@@ -24,7 +24,23 @@ logger = logging.getLogger(__name__)
 # Configuration
 UPDATE_INTERVAL_BASE_MS = 100  # Base interval between updates
 UPDATE_INTERVAL_JITTER_MS = 100  # Random jitter (0-100ms) added to base
-ARRIVAL_THRESHOLD_KM = 0.005  # 5 meters - consider arrived
+ARRIVAL_THRESHOLD_KM = 0.005  # 5 meters - minimum arrival threshold
+
+
+def arrival_threshold_km(speed_kmh: float) -> float:
+    """Dynamic arrival threshold: distance traveled in 5ms at current speed.
+
+    Formula: speed_kmh / 720_000 = speed_kmh * 5ms / 3_600_000 ms/h
+    At 5 km/h → 0.000007 km (7mm), at 120 km/h → 0.000167 km (17cm),
+    at 36000 km/h → 0.05 km (50m).
+
+    Combined with overshoot clamping in _cruise_loop, this ensures:
+    - Short segments at slow speeds are traveled, not skipped
+    - High-speed cruise converges reliably (no oscillation)
+    """
+    if speed_kmh <= 0:
+        return 0.000001  # 1mm floor for zero/negative speed
+    return speed_kmh / 720_000
 
 
 def _get_next_interval() -> float:
@@ -212,7 +228,7 @@ class CruiseService:
             return {"success": False, "error": "Location callback not configured"}
 
         distance = distance_between(start_lat, start_lon, target_lat, target_lon)
-        if distance < ARRIVAL_THRESHOLD_KM:
+        if distance < arrival_threshold_km(speed_kmh):
             return {"success": False, "error": "Already at target location"}
 
         # Create session
@@ -412,7 +428,7 @@ class CruiseService:
                 )
 
                 # Check if arrived
-                if distance < ARRIVAL_THRESHOLD_KM:
+                if distance < arrival_threshold_km(session.speed_kmh):
                     # Snap to target
                     session.current_lat = session.target_lat
                     session.current_lon = session.target_lon
@@ -476,11 +492,17 @@ class CruiseService:
                     duration_sec
                 )
 
-                # Update distance traveled
+                # Overshoot clamping: if step >= remaining distance,
+                # snap to target to prevent oscillation at any speed.
                 step_distance = distance_between(
                     session.current_lat, session.current_lon,
                     new_lat, new_lon
                 )
+                if step_distance >= distance:
+                    new_lat = session.target_lat
+                    new_lon = session.target_lon
+                    step_distance = distance
+
                 session.distance_traveled_km += step_distance
 
                 # Update position

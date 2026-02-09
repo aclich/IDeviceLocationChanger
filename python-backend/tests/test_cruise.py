@@ -333,7 +333,3 @@ class TestCruiseService:
         calls = cruise_service._emit_event.call_args_list
         stopped_events = [c for c in calls if c[0][0].get("event") == "cruiseStopped"]
         assert len(stopped_events) == 1
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

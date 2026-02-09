@@ -680,8 +680,9 @@ class TestRouteServiceCruise:
         # Start cruise (sync)
         route_service.start_route_cruise("device-1", speed_kmh=10.0)
 
-        # Simulate completing all segments (2 segments * 2 point pairs = 4 arrivals)
-        for _ in range(4):
+        # Simulate completing all segments
+        # 2 segments * 2 point pairs + 1 bridge between segments = 5 arrivals
+        for _ in range(5):
             if "device-1" in route_service._sessions:
                 route_service._on_point_arrival(
                     "device-1",
@@ -714,8 +715,9 @@ class TestRouteServiceCruise:
         # Start cruise (sync)
         route_service.start_route_cruise("device-1", speed_kmh=10.0)
 
-        # Simulate completing all 3 segments (3 segments * 2 point pairs = 6 arrivals)
-        for _ in range(6):
+        # Simulate completing all 3 segments + bridge cruises between them
+        # 3 segments * 2 point pairs + 2 bridges between segs + 1 bridge for loop restart = 9 arrivals
+        for _ in range(9):
             if "device-1" in route_service._sessions:
                 route_service._on_point_arrival(
                     "device-1",
@@ -1080,12 +1082,14 @@ class TestRouteServiceEdgeCases:
         )
         route_service.start_route_cruise("device-1", speed_kmh=10.0)
 
-        # Complete all segments (2 segments * 2 point pairs = 4 arrivals)
-        for _ in range(4):
-            route_service._on_point_arrival(
-                "device-1",
-                {"deviceId": "device-1", "location": {}, "distanceTraveledKm": 0.75, "durationSeconds": 270}
-            )
+        # Complete all segments + bridge cruises
+        # 2 segments * 2 point pairs + 1 bridge + loop restart triggers on 5th arrival
+        for _ in range(5):
+            if "device-1" in route_service._sessions:
+                route_service._on_point_arrival(
+                    "device-1",
+                    {"deviceId": "device-1", "location": {}, "distanceTraveledKm": 0.75, "durationSeconds": 270}
+                )
 
         # Check routeLoopComplete event
         calls = route_service._emit_event.call_args_list
@@ -1094,7 +1098,3 @@ class TestRouteServiceEdgeCases:
 
         # Clean up
         route_service.stop_route_cruise("device-1")
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
