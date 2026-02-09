@@ -138,17 +138,17 @@
 
 ### 12. Manual E2E Testing
 
-- [ ] 12.1 Start app in dev mode (manual)
-- [ ] 12.2 Toggle route mode and add 3 waypoints on map (manual)
-- [ ] 12.3 Verify polylines and markers render correctly (manual)
-- [ ] 12.4 Verify distance calculation matches Brouter (manual)
-- [ ] 12.5 Enable loop mode and verify auto-closure (manual)
-- [ ] 12.6 Start route cruise and verify device moves along path (manual)
-- [ ] 12.7 Test pause/resume mid-route (manual)
-- [ ] 12.8 Test speed slider updates in real-time (manual)
-- [ ] 12.9 Test undo waypoint (manual)
-- [ ] 12.10 Test loop iteration (device reaches START and repeats) (manual)
-- [ ] 12.11 Test fallback (disable internet, verify straight-line fallback) (manual)
+- [x] 12.1 Start app in dev mode (manual)
+- [x] 12.2 Toggle route mode and add 3 waypoints on map (manual)
+- [x] 12.3 Verify polylines and markers render correctly (manual)
+- [x] 12.4 Verify distance calculation matches Brouter (manual)
+- [x] 12.5 Enable loop mode and verify auto-closure (manual)
+- [x] 12.6 Start route cruise and verify device moves along path (manual)
+- [x] 12.7 Test pause/resume mid-route (manual)
+- [x] 12.8 Test speed slider updates in real-time (manual)
+- [x] 12.9 Test undo waypoint (manual)
+- [x] 12.10 Test loop iteration (device reaches START and repeats) (manual)
+- [x] 12.11 Test fallback (disable internet, verify straight-line fallback) (manual)
 
 ### 13. Documentation
 
