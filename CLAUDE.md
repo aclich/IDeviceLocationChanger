@@ -11,7 +11,7 @@ GPS location simulator for iOS devices. Cross-platform Electron desktop app with
 ```bash
 # Install dependencies
 npm install
-pip install -r python-backend/requirements.txt
+pip install -r backend/requirements.txt
 
 # Development (runs Vite + Electron concurrently)
 npm run dev
@@ -38,7 +38,7 @@ npm run test:all          # Both
 
 # Run single test file
 npx vitest run src/hooks/useMovement.test.js
-cd python-backend && .venv/bin/pytest test_tunnel.py -v
+cd backend && .venv/bin/pytest test_tunnel.py -v
 ```
 
 ## Architecture
@@ -66,7 +66,7 @@ cd python-backend && .venv/bin/pytest test_tunnel.py -v
 └─────────────────────────────────────────────────────────────┘
                 ↕ JSON-RPC (stdin/stdout via python-bridge.js)
 ┌─────────────────────────────────────────────────────────────┐
-│  Python Backend (python-backend/)                           │
+│  Python Backend (backend/)                                  │
 │  ├─ main.py - Server entry point (stdin/stdout or HTTP)     │
 │  ├─ models.py - Device and tunnel dataclasses               │
 │  └─ services/                                               │

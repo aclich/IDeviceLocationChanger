@@ -23,7 +23,7 @@ describe('useMovement', () => {
   });
 
   // Note: Cruise mode has been moved to the backend (useBackend hook).
-  // See python-backend/test_cruise.py for cruise mode tests.
+  // See backend/test_cruise.py for cruise mode tests.
 
   describe('speed control', () => {
     it('updates speed within valid range', async () => {

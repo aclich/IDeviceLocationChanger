@@ -27,7 +27,7 @@ class PythonBridge extends EventEmitter {
    */
   async start() {
     const pythonPath = this.findPython();
-    const backendPath = path.join(__dirname, '../python-backend/main.py');
+    const backendPath = path.join(__dirname, '../backend/main.py');
 
     console.log(`[PythonBridge] Starting backend: ${pythonPath} ${backendPath}`);
     console.log(`[PythonBridge] Server will listen on http://${this.host}:${this.port}`);

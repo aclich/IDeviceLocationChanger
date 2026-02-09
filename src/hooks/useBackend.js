@@ -51,7 +51,7 @@ export function useBackend() {
     const healthy = await window.backend.checkHealth();
     setIsConnected(healthy);
     if (!healthy) {
-      setError('Backend not running. Start with: python python-backend/main.py');
+      setError('Backend not running. Start with: python backend/main.py');
     } else {
       setError(null);
     }
