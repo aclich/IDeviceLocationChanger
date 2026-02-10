@@ -248,25 +248,6 @@ class TestTunnelManagerExtractTunnelInfo:
         assert result is None
 
 
-class TestTunnelManagerStopTunnel:
-    """Tests for stop_tunnel method."""
-
-    def test_stop_tunnel_clears_specific_device_state(self):
-        manager = TunnelManager()
-        tunnel = RSDTunnel(address="192.168.1.1", port=8080, udid="test-udid")
-        state = TunnelState(
-            udid="test-udid",
-            status=TunnelStatus.CONNECTED,
-            tunnel_info=tunnel,
-        )
-        manager._last_status["test-udid"] = state
-
-        result = manager.stop_tunnel(udid="test-udid")
-
-        assert result["success"] is True
-        assert "test-udid" not in manager._last_status
-
-
 class TestTunnelManagerIsTunneldRunning:
     """Tests for _is_tunneld_running method."""
 

@@ -7,15 +7,15 @@
     "dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "dev:vite": "vite",
     "dev:electron": "electron .",
-    "dev:browser": "concurrently -k -n backend,frontend -c blue,green \"backend/.venv/bin/python backend/main.py --http\" \"vite\"",
-    "backend": "backend/.venv/bin/python backend/main.py --http",
+    "dev:browser": "concurrently -k -n backend,frontend -c blue,green \"python backend/main.py --http\" \"vite\"",
+    "backend": "python backend/main.py --http",
     "build": "vite build",
     "build:electron": "vite build && electron-builder",
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:backend": "cd backend && .venv/bin/pytest",
+    "test:backend": "pytest",
     "test:all": "npm run test:run && npm run test:backend"
   },
   "dependencies": {
