@@ -49,10 +49,10 @@ describe('useMovement', () => {
         result.current.setSpeed(0);
       });
 
-      expect(result.current.speed).toBe(1);
+      expect(result.current.speed).toBe(0.1);
     });
 
-    it('clamps speed to maximum', async () => {
+    it('allows speed above 50 (no upper clamp)', async () => {
       const { result } = renderHook(() =>
         useMovement({ location: null, setLocation: mockSetLocation })
       );
@@ -61,7 +61,7 @@ describe('useMovement', () => {
         result.current.setSpeed(100);
       });
 
-      expect(result.current.speed).toBe(50);
+      expect(result.current.speed).toBe(100);
     });
   });
 
