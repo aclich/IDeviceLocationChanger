@@ -27,7 +27,23 @@
 - [x] #8 multi-device support
     - Backend remove selected device logic.
     - let frontend handle device selection, and send device id to backend when setting location eachtime.
-- [ ] #9 Save route
+    - backend sse need to send device id with each location update event
+    - frontend need to save location info per device, when switching device, load the last location set for that device
+    - frontend during select device change, load the infos from backend. The info should have:
+      - current location when backend have refreshing task running for the device
+      - last location if backend not refreshing
+      - if is cruising
+        - cruising target location
+      - if is route cruising
+        - show the route relate info on map
+    
+- [ ] #9 Favorite route feature
+    - Save the current view of route (waypoints and order).
+    - Load the route back to map. ( after load user can decide how to go to start point, directly jump / strate line cruise / pathfinding route cruise)
+    - default name is "country / city / district (start point) -> [country / city / district] (start point)" format, skip the end point name if same as start point, use reverse geocoding with system locale. 
+    - Manage favorite routes in a separate popup window, similar to favorite location management.
+    - 
+
 
 # Bugs
 - [x] Cruise mode not cleaning target icon on map when reaching destination
@@ -38,12 +54,15 @@
     - see CruiseModeRefactor.md for more details
 - [x] Swtich to debug tab and back to Simumlator tap, the map will lost the current location centering and the icons
     - Fixed: Use CSS display to hide/show tabs instead of conditional rendering, so map instance stays mounted
-- [ ] Location refresh continues after tunnel stop
-    - When stopTunnel is called, LocationService's refresh task continues running
-    - main.py _stop_tunnel() only calls tunnel.stop_tunnel() but not location.close_connection()
-    - The refresh task keeps trying to send location updates every 3 seconds even though tunnel is gone
-    - Fix: Call location.close_connection(udid) when stopping tunnel
-
+- [ ] Switch to debug tab and back to simulator tab, the map can not display normally, it will be blank and only showing top-left corner of the map, need to refresh the page to make it work again.
+- [x] Page will become laggy due to many debug log in debug page
+    - The debug log only keep 100 lines by default, user can change the log limit in a input box, next to the log clear button, to avoid too many logs cause the page laggy. When the log limit is reached, the oldest log will be removed when new log comes in.
+- [ ] idle location refreshing will not retry with getting new tunnel if refresh failed due to connection issue.
+    - When the location refresh task encounters a connection error (e.g., tunnel down), it should trigger a retry mechanism that attempts to get a new tunnel and resend the location update. This ensures that transient connection issues don't cause the location updates to stop indefinitely.
+    - The low-level location setting should be unified accross every place in the codebase, so that any location update will have the retry logic built in. This includes both the periodic refresh task and any on-demand location updates triggered by user actions. This could need a refactor task for better resolve.
+- [ ] multi-device support
+    - The frontend auto-mode switch by device state is not fully correct.  When I'm in idle device on direct mode, switch back to a device is route cruising, the route cruise panel showing, but the mode still select the direct mode and cause the cruise pause. The correct behavior should be switch to route mode when switch to a device with route cruise state, no matter what the previous mode is.
+    - The speed slider does not change to device speed when switch device, test in two device in route cruise mode with different speed, switch between them, the speed slider does not update to the current device speed, it always keep the previous device speed. The correct behavior should be update the speed slider to current device speed when switch device.
 # UI Improvements
 - [x] Make latitude/longitude text not split line when the number of digits change longer
 
@@ -53,11 +72,16 @@
     - Can save selected location, not only current location
 - [ ] restore existing device location setting from backend when frontend refreshed
     - when frontend start, if the selected device has existing location setting in backend (refreshing), load and set the location on map
-- [ ] Simplify tunnel management UX
+    - should be done with feature #8 multi-device support, since we need to save location per device in backend
+- [x] Simplify tunnel management UX
+    -  When backend start up, check if tunneld if running by http query. if not, run tunneld command directly. From user perspective, they will see a admimn prompt showing when project start up if tunneld not running.  
     - Remove separate "Start Tunnel" button
     - Auto-start tunnel when device is selected (if device requires tunnel for iOS 17+)
-    - Add "X" button on connected device label to stop tunnel/disconnect
+    - Add "X" button on connected device label to stop tunnel(disconnect)
     - User only needs to select device - tunnel management happens automatically
+- [ ] can not undo last waypoint in route cruise mode running
+- [ ] Route cruise can go reverse
 
-# Debug features
+
+# Debug 
 - [x] Add a dynamic port forwarding debug feature, user can forward frontend, backend 127.0.0.1:port to another network interface addr:port for remote debug. like ngrok, but simpler.

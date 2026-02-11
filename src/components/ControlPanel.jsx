@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Joystick } from './Joystick';
 import { FavoritesDropdown } from './FavoritesDropdown';
 import { distanceBetween } from '../utils/coordinateCalculator';
@@ -36,9 +36,25 @@ export function ControlPanel({
   onManageFavorites,
   canSaveLocation,
   hasSelectedLocation,
+  externalMode,
+  speed: externalSpeed,
 }) {
   const [mode, setMode] = useState(MODES.DIRECT);
-  const [speed, setSpeed] = useState(5);
+  const [speed, setSpeed] = useState(externalSpeed ?? 5);
+
+  // Sync mode from parent (e.g. device switch auto-mode)
+  useEffect(() => {
+    if (externalMode && externalMode !== mode) {
+      setMode(externalMode);
+    }
+  }, [externalMode]);
+
+  // Sync speed from parent (e.g. device switch restores device speed)
+  useEffect(() => {
+    if (externalSpeed != null && externalSpeed !== speed) {
+      setSpeed(externalSpeed);
+    }
+  }, [externalSpeed]);
   const [coordInput, setCoordInput] = useState('');
   const [inputError, setInputError] = useState(null);
   const [customSpeedEnabled, setCustomSpeedEnabled] = useState(false);

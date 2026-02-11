@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { isBrowserMode } from '../utils/backendClient';
 
 // Simple logger for useBackend hook events
@@ -38,9 +38,16 @@ export function useBackend() {
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(true); // Updated in useEffect after backend init
+  const [deviceSwitchLoading, setDeviceSwitchLoading] = useState(false);
+
+  // Badge state for all devices (SSE-driven)
+  const [badgeMap, setBadgeMap] = useState({});
 
   const cleanupRef = useRef(null);
   const healthCheckRef = useRef(null);
+
+  // Ref to avoid stale closures in SSE handler
+  const selectedDeviceRef = useRef(null);
 
   // Check backend connection
   const checkConnection = useCallback(async () => {
@@ -74,118 +81,190 @@ export function useBackend() {
 
     logger.info('Setting up backend event listener (SSE)');
 
+    // Helper: update badge map for any device event
+    const updateBadge = (data) => {
+      const deviceId = data?.deviceId;
+      if (!deviceId) return;
+      setBadgeMap(prev => ({ ...prev, [deviceId]: { ...prev[deviceId] } }));
+    };
+
+    const updateBadgeCruise = (deviceId, cruising, paused) => {
+      if (!deviceId) return;
+      setBadgeMap(prev => ({
+        ...prev,
+        [deviceId]: {
+          ...prev[deviceId],
+          cruising,
+          cruisePaused: paused,
+          // Clear route fields if this is a standalone cruise
+          routeCruising: prev[deviceId]?.routeCruising || false,
+          routePaused: prev[deviceId]?.routePaused || false,
+          routeProgress: prev[deviceId]?.routeProgress || null,
+        },
+      }));
+    };
+
+    const updateBadgeRoute = (deviceId, cruising, paused, progress) => {
+      if (!deviceId) return;
+      setBadgeMap(prev => ({
+        ...prev,
+        [deviceId]: {
+          cruising: false,
+          cruisePaused: false,
+          routeCruising: cruising,
+          routePaused: paused,
+          routeProgress: progress,
+        },
+      }));
+    };
+
+    const clearBadge = (deviceId) => {
+      if (!deviceId) return;
+      setBadgeMap(prev => {
+        const next = { ...prev };
+        delete next[deviceId];
+        return next;
+      });
+    };
+
     cleanupRef.current = window.backend.onEvent((message) => {
-      // Handle events (logging is done in backendClient)
+      const eventDeviceId = message.data?.deviceId;
+      const isForSelected = eventDeviceId && selectedDeviceRef.current?.id === eventDeviceId;
+
       switch (message.event) {
         case 'connected':
-          // SSE connection established
           setIsConnected(true);
           setError(null);
+          // Re-seed badge state on SSE reconnection
+          sendRequest('getAllDeviceStates').then(resp => {
+            if (resp.result) setBadgeMap(resp.result);
+          });
           break;
 
         case 'error':
           setError(message.data?.message || 'Unknown error');
           break;
 
-        // Tunneld daemon events
         case 'tunneldStatus':
           setTunneldState(message.data);
           break;
 
         case 'tunnelStatusChanged':
-          // Update tunnel status if it's for the currently selected device
-          if (message.data?.udid) {
-            setTunnelStatus(prev => {
-              // Only update if this event is for the selected device
-              // (will be checked against selectedDevice in the component)
-              return {
-                status: message.data.status,
-                address: message.data.address,
-                port: message.data.port,
-                udid: message.data.udid,
-              };
+          if (message.data?.udid && isForSelected) {
+            setTunnelStatus({
+              status: message.data.status,
+              address: message.data.address,
+              port: message.data.port,
+              udid: message.data.udid,
             });
           }
           break;
 
-        // Cruise events
+        // Cruise events — update badge for ALL, full state only for selected
         case 'cruiseStarted':
-          setCruiseStatus(message.data);
+          updateBadgeCruise(eventDeviceId, true, false);
+          if (isForSelected) setCruiseStatus(message.data);
           break;
 
         case 'cruiseUpdate':
-          setCruiseStatus(message.data);
-          // Update location from cruise movement
-          if (message.data?.location) {
-            setLocation(message.data.location);
+          // Badge: no change needed (already cruising)
+          if (isForSelected) {
+            setCruiseStatus(message.data);
+            if (message.data?.location) setLocation(message.data.location);
           }
           break;
 
         case 'cruiseArrived':
-          setCruiseStatus(null);
-          // Snap to final location
-          if (message.data?.location) {
-            setLocation(message.data.location);
+          updateBadgeCruise(eventDeviceId, false, false);
+          if (isForSelected) {
+            setCruiseStatus(null);
+            if (message.data?.location) setLocation(message.data.location);
+            logger.info(`Cruise arrived after ${message.data?.distanceTraveledKm?.toFixed(2)}km`);
           }
-          logger.info(`Cruise arrived after ${message.data?.distanceTraveledKm?.toFixed(2)}km`);
           break;
 
         case 'cruiseStopped':
-          setCruiseStatus(null);
+          updateBadgeCruise(eventDeviceId, false, false);
+          if (isForSelected) setCruiseStatus(null);
           break;
 
         case 'cruisePaused':
-          setCruiseStatus(message.data);
+          updateBadgeCruise(eventDeviceId, true, true);
+          if (isForSelected) setCruiseStatus(message.data);
           break;
 
         case 'cruiseResumed':
-          setCruiseStatus(message.data);
+          updateBadgeCruise(eventDeviceId, true, false);
+          if (isForSelected) setCruiseStatus(message.data);
           break;
 
         case 'cruiseError':
-          setCruiseStatus(null);
-          setError(`Cruise error: ${message.data?.error}`);
-          break;
-
-        // Route events
-        case 'routeStarted':
-          setRouteStatus(message.data);
-          break;
-
-        case 'routeUpdate':
-          setRouteStatus(message.data);
-          // Update location from route movement (route delegates to cruise which updates position)
-          if (message.data?.route) {
-            setRouteState(message.data.route);
+          updateBadgeCruise(eventDeviceId, false, false);
+          if (isForSelected) {
+            setCruiseStatus(null);
+            setError(`Cruise error: ${message.data?.error}`);
           }
           break;
 
+        // Route events — update badge for ALL, full state only for selected
+        case 'routeStarted': {
+          const total = message.data?.totalSegments || 0;
+          const current = (message.data?.currentSegmentIndex || 0);
+          updateBadgeRoute(eventDeviceId, true, false, `${current}/${total}`);
+          if (isForSelected) setRouteStatus(message.data);
+          break;
+        }
+
+        case 'routeUpdate': {
+          const total = message.data?.totalSegments || 0;
+          const current = (message.data?.currentSegmentIndex || 0);
+          const isPaused = message.data?.state === 'paused';
+          updateBadgeRoute(eventDeviceId, true, isPaused, `${current}/${total}`);
+          if (isForSelected) {
+            setRouteStatus(message.data);
+            if (message.data?.route) setRouteState(message.data.route);
+          }
+          break;
+        }
+
         case 'routeArrived':
-          setRouteStatus(null);
-          setCruiseStatus(null); // Clean up stale cruise state
+          updateBadgeRoute(eventDeviceId, false, false, null);
+          if (isForSelected) {
+            setRouteStatus(null);
+            setCruiseStatus(null);
+          }
           break;
 
-        case 'routeSegmentComplete':
-          setRouteStatus(message.data);
+        case 'routeSegmentComplete': {
+          const total = message.data?.totalSegments || 0;
+          const current = (message.data?.currentSegmentIndex || 0);
+          updateBadgeRoute(eventDeviceId, true, false, `${current}/${total}`);
+          if (isForSelected) setRouteStatus(message.data);
           break;
+        }
 
-        case 'routeLoopComplete':
-          setRouteStatus(message.data);
+        case 'routeLoopComplete': {
+          const total = message.data?.totalSegments || 0;
+          updateBadgeRoute(eventDeviceId, true, false, `0/${total}`);
+          if (isForSelected) setRouteStatus(message.data);
           break;
+        }
 
         case 'routeWaypointAdded':
-          if (message.data?.route) {
+          if (isForSelected && message.data?.route) {
             setRouteState(message.data.route);
           }
           break;
 
         case 'routeError':
-          setRouteStatus(null);
-          setError(`Route error: ${message.data?.error}`);
+          updateBadgeRoute(eventDeviceId, false, false, null);
+          if (isForSelected) {
+            setRouteStatus(null);
+            setError(`Route error: ${message.data?.error}`);
+          }
           break;
 
         default:
-          // Unknown events are logged by backendClient
           break;
       }
     });
@@ -240,21 +319,33 @@ export function useBackend() {
     }
   }, []);
 
-  const selectDevice = useCallback(async (deviceId) => {
+  const selectDevice = useCallback(async (deviceId, deviceObj = null) => {
     setError(null);
-    const response = await sendRequest('selectDevice', { deviceId });
-    if (response.result?.device) {
-      setSelectedDevice(response.result.device);
-      // Extract tunnel info from enriched response
-      setTunnelStatus(response.result.tunnel || null);
-      logger.info('Device selected:', response.result.device.name);
-    } else if (response.error) {
-      setError(response.error.message);
-    } else if (response.result && !response.result.success) {
-      setError(response.result.error || 'Failed to select device');
+    setDeviceSwitchLoading(true);
+    try {
+      // Find device object from devices list if not provided
+      const device = deviceObj || devices.find(d => d.id === deviceId) || { id: deviceId, name: deviceId };
+      setSelectedDevice(device);
+      selectedDeviceRef.current = device;
+
+      // Query backend for full device state
+      const response = await sendRequest('getDeviceState', { deviceId });
+      if (response.result) {
+        const state = response.result;
+        setLocation(state.location || null);
+        setTunnelStatus(state.tunnel || null);
+        setCruiseStatus(state.cruise || null);
+        setRouteState(state.route || null);
+        setRouteStatus(state.routeCruise || null);
+        logger.info('Device selected:', device.name);
+      } else if (response.error) {
+        setError(response.error.message);
+      }
+      return response;
+    } finally {
+      setDeviceSwitchLoading(false);
     }
-    return response;
-  }, []);
+  }, [devices]);
 
   // =========================================================================
   // Location Operations
@@ -323,11 +414,18 @@ export function useBackend() {
     const response = await sendRequest('disconnectDevice', { deviceId });
     if (response.result?.success) {
       setSelectedDevice(null);
+      selectedDeviceRef.current = null;
       setLocation(null);
       setTunnelStatus(null);
       setCruiseStatus(null);
       setRouteStatus(null);
       setRouteState(null);
+      // Clear badge for disconnected device
+      setBadgeMap(prev => {
+        const next = { ...prev };
+        delete next[deviceId];
+        return next;
+      });
       logger.info('Device disconnected');
     }
     return response;
@@ -566,6 +664,12 @@ export function useBackend() {
   // Return API
   // =========================================================================
 
+  // Seed badge map on initial load
+  const seedBadges = useCallback(async () => {
+    const resp = await sendRequest('getAllDeviceStates');
+    if (resp.result) setBadgeMap(resp.result);
+  }, []);
+
   return {
     // State
     devices,
@@ -578,11 +682,14 @@ export function useBackend() {
     isLoading,
     isConnected,
     isBrowserMode: isBrowserMode(),
+    badgeMap,
+    deviceSwitchLoading,
 
     // Device actions
     listDevices,
     selectDevice,
     disconnectDevice,
+    seedBadges,
 
     // Location actions
     setLocation: setLocationOnDevice,

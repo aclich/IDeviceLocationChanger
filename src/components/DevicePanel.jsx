@@ -10,6 +10,7 @@ export function DevicePanel({
   tunnelStatus,
   tunneldState,
   onRetryTunneld,
+  badgeMap = {},
 }) {
   // Auto-refresh devices on mount
   useEffect(() => {
@@ -54,6 +55,20 @@ export function DevicePanel({
     }
   };
 
+  const getBadgeInfo = (deviceId) => {
+    const badge = badgeMap[deviceId];
+    if (!badge) return null;
+    if (badge.routeCruising) {
+      if (badge.routePaused) return { text: 'route paused', className: 'badge-paused' };
+      return { text: `route ${badge.routeProgress || ''}`, className: 'badge-route' };
+    }
+    if (badge.cruising) {
+      if (badge.cruisePaused) return { text: 'paused', className: 'badge-paused' };
+      return { text: 'cruising...', className: 'badge-cruising' };
+    }
+    return null;
+  };
+
   const handleDisconnect = (e, device) => {
     e.stopPropagation(); // Don't trigger device selection
     if (window.confirm(`This will disconnect location simulation for ${device.name}. Continue?`)) {
@@ -95,6 +110,7 @@ export function DevicePanel({
         ) : (
           devices.map((device) => {
             const isSelected = selectedDevice?.id === device.id;
+            const badge = !isSelected ? getBadgeInfo(device.id) : null;
             return (
               <div
                 key={device.id}
@@ -106,6 +122,9 @@ export function DevicePanel({
                   <div className="device-name">{device.name}</div>
                   <div className="device-subtitle">{getDeviceSubtitle(device)}</div>
                 </div>
+                {badge && (
+                  <span className={`device-badge ${badge.className}`}>{badge.text}</span>
+                )}
                 {isSelected && (
                   <button
                     className="btn-disconnect"

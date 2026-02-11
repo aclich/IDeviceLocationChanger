@@ -372,6 +372,16 @@ class RouteService:
 
         return {"success": True, "route": Route().to_dict()}
 
+    def get_route(self, device_id: str) -> Optional[dict]:
+        """Get route definition for a device, or None if no route exists."""
+        route = self._routes.get(device_id)
+        return route.to_dict() if route else None
+
+    def get_route_session(self, device_id: str) -> Optional[dict]:
+        """Get active route cruise session for a device, or None."""
+        session = self._sessions.get(device_id)
+        return session.to_dict() if session else None
+
     def get_route_status(self, device_id: str) -> dict:
         """Get current route and cruise state for a device."""
         route = self._routes.get(device_id)
