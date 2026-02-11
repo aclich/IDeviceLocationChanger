@@ -7,11 +7,9 @@ It does NOT cache tunnel info - each get_tunnel() call queries tunneld fresh.
 import json
 import logging
 import os
-import re
 import subprocess
 import sys
 import time
-import threading
 import urllib.request
 from typing import Callable, Optional
 
@@ -77,6 +75,8 @@ class TunnelManager:
             result = self._start_tunneld_daemon_macos(python_path)
         elif sys.platform == "linux":
             result = self._start_tunneld_daemon_linux(python_path)
+        elif sys.platform == "win32":
+            result = self._start_tunneld_daemon_windows(python_path)
         else:
             self._emit_tunneld_status("error", f"Unsupported platform: {sys.platform}")
             return "error"
@@ -131,6 +131,52 @@ class TunnelManager:
             )
             time.sleep(2)
             for _ in range(16):  # ~8 seconds
+                if self._is_tunneld_running():
+                    return True
+                time.sleep(0.5)
+            self._last_error = "Tunnel did not become available"
+            return False
+        except Exception as e:
+            self._last_error = str(e)
+            return False
+
+    def _start_tunneld_daemon_windows(self, python_path: str) -> bool:
+        """Start tunneld daemon on Windows. Returns True on success.
+
+        Attempts to launch with UAC elevation via ShellExecuteW (runas).
+        Falls back to direct launch if already running as admin.
+        """
+        import ctypes
+
+        tunneld_log = os.path.join(os.environ.get("TEMP", "."), "tunneld.log")
+        args = f"-m pymobiledevice3 remote tunneld -d"
+
+        try:
+            # Check if already running as admin
+            is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+
+            if is_admin:
+                # Already admin — launch directly
+                logger.info("Running as admin, starting tunneld directly...")
+                subprocess.Popen(
+                    [python_path, "-m", "pymobiledevice3", "remote", "tunneld", "-d"],
+                    stdout=open(tunneld_log, "w"),
+                    stderr=subprocess.STDOUT,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+            else:
+                # Request UAC elevation
+                logger.info("Requesting admin privileges for tunneld via UAC...")
+                ret = ctypes.windll.shell32.ShellExecuteW(
+                    None, "runas", python_path, args, None, 0  # SW_HIDE
+                )
+                if ret <= 32:
+                    self._last_error = "UAC elevation was denied or failed"
+                    return False
+
+            # Wait for tunneld to become responsive
+            time.sleep(2)
+            for _ in range(26):  # ~13 seconds
                 if self._is_tunneld_running():
                     return True
                 time.sleep(0.5)
@@ -221,82 +267,6 @@ class TunnelManager:
             state.error = "Connection failed"
             logger.info(f"[{udid[:8]}] Tunnel marked as disconnected")
 
-    def start_tunnel(self, udid: str) -> dict:
-        """
-        Explicitly start tunnel for device. May require admin password.
-
-        Called by UI "Start Tunnel" button when no tunnel exists.
-        """
-        if not udid:
-            return {"success": False, "error": "UDID required"}
-
-        logger.info("=" * 50)
-        logger.info(f"Starting tunnel for {udid[:8]}...")
-        logger.info("=" * 50)
-
-        self._last_error = None
-
-        # Step 1: Check for existing tunnel
-        logger.info("Checking for existing tunnel...")
-        tunnel = self._query_tunneld_http(udid)
-
-        if tunnel:
-            logger.info(f"[{udid[:8]}] Found existing tunnel: {tunnel.address}:{tunnel.port}")
-            self._update_status(udid, TunnelStatus.CONNECTED, tunnel)
-            return {
-                "success": True,
-                "address": tunnel.address,
-                "port": tunnel.port,
-                "udid": udid,
-                "status": TunnelStatus.CONNECTED.value,
-            }
-
-        # Step 2: Start new tunnel (requires admin)
-        logger.info("No tunnel found, starting new tunnel...")
-        tunnel = self._start_new_tunnel(udid)
-
-        if tunnel:
-            self._update_status(udid, TunnelStatus.CONNECTED, tunnel)
-            logger.info(f"[{udid[:8]}] SUCCESS: Tunnel started: {tunnel.address}:{tunnel.port}")
-            return {
-                "success": True,
-                "address": tunnel.address,
-                "port": tunnel.port,
-                "udid": udid,
-                "status": TunnelStatus.CONNECTED.value,
-            }
-        else:
-            self._update_status(udid, TunnelStatus.ERROR, None, self._last_error)
-            logger.error(f"[{udid[:8]}] FAILED: {self._last_error}")
-            return {"success": False, "error": self._last_error or "Unknown error"}
-
-    def stop_tunnel(self, udid: str = None) -> dict:
-        """
-        Stop tunnel for device or all tunnels.
-
-        If udid provided: clear that device's status
-        If udid is None: stop all tunnel processes (requires admin)
-        """
-        logger.info(f"Stopping tunnel...{f' (UDID: {udid[:8]})' if udid else ' (all)'}")
-
-        if udid:
-            # Just clear the specific device's status
-            if udid in self._last_status:
-                del self._last_status[udid]
-            logger.info(f"[{udid[:8]}] Tunnel state cleared")
-        else:
-            # Stop all tunnel processes
-            if sys.platform == "darwin":
-                self._stop_tunnel_macos()
-            elif sys.platform == "linux":
-                self._stop_tunnel_linux()
-
-            # Clear all states
-            self._last_status.clear()
-            logger.info("All tunnels stopped")
-
-        return {"success": True}
-
     # =========================================================================
     # Internal Helpers
     # =========================================================================
@@ -355,7 +325,7 @@ class TunnelManager:
 
     def _extract_tunnel_info(self, device_info, udid: str) -> Optional[RSDTunnel]:
         """Extract tunnel info from device data."""
-        # Handle list format: [{"tunnel-address": ..., "tunnel-port": ...}]
+        # Handle list format: [{"tunnel-address": ..., "tunnel-port": ...}]``
         if isinstance(device_info, list):
             if not device_info:
                 return None
@@ -380,240 +350,89 @@ class TunnelManager:
         return None
 
     def _is_tunneld_running(self) -> bool:
-        """Check if tunneld process is running via ps."""
+        """Check if tunneld process is running.
+
+        First tries querying the tunneld HTTP API (cross-platform).
+        Falls back to platform-specific process checks.
+        """
+        # Fast path: try HTTP API (works on all platforms)
         try:
-            result = subprocess.run(
-                ["pgrep", "-f", "pymobiledevice3.*tunneld"],
-                capture_output=True, text=True, timeout=5
-            )
-            return result.returncode == 0
-        except Exception:
-            return False
-
-    # =========================================================================
-    # Start New Tunnel (requires admin)
-    # =========================================================================
-
-    def _start_new_tunnel(self, udid: str) -> Optional[RSDTunnel]:
-        """Start new tunnel - platform specific, may require admin."""
-        if sys.platform == "darwin":
-            return self._start_tunnel_macos(udid)
-        elif sys.platform == "linux":
-            return self._start_tunnel_linux(udid)
-        else:
-            self._last_error = f"Unsupported platform: {sys.platform}"
-            return None
-
-    def _start_tunnel_macos(self, udid: str) -> Optional[RSDTunnel]:
-        """Start tunnel on macOS."""
-        python_path = self._find_python_with_pymobiledevice3()
-        logger.info(f"Using Python: {python_path}")
-
-        # Check if tunneld is already running
-        if self._is_tunneld_running():
-            # Tunneld running but device not found - try direct tunnel
-            logger.info("Tunneld running, trying direct lockdown tunnel...")
-            return self._start_lockdown_tunnel_macos(python_path, udid)
-        else:
-            # Start tunneld daemon
-            logger.info("Starting tunneld daemon...")
-            tunnel = self._start_tunneld_macos(python_path, udid)
-            if tunnel:
-                return tunnel
-
-            # Fallback to direct tunnel
-            logger.info("Tunneld failed, trying direct lockdown tunnel...")
-            return self._start_lockdown_tunnel_macos(python_path, udid)
-
-    def _start_tunneld_macos(self, python_path: str, udid: str) -> Optional[RSDTunnel]:
-        """Start tunneld daemon on macOS with admin privileges."""
-        script = f'''
-        do shell script "{python_path} -m pymobiledevice3 remote tunneld -d > /tmp/tunneld.log 2>&1 &" with administrator privileges
-        '''
-
-        try:
-            logger.info("Requesting admin privileges for tunneld...")
-            result = subprocess.run(
-                ["osascript", "-e", script],
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-
-            if result.returncode != 0:
-                stderr = result.stderr or result.stdout
-                if "User canceled" in stderr:
-                    self._last_error = "Admin authentication cancelled"
-                    return None
-                logger.warning(f"tunneld returned: {stderr}")
-
-            # Wait for tunnel
-            time.sleep(2)
-            return self._wait_for_tunnel(max_wait=15, udid=udid)
-
-        except subprocess.TimeoutExpired:
-            self._last_error = "Timeout waiting for admin authentication"
-            return None
-        except Exception as e:
-            self._last_error = str(e)
-            return None
-
-    def _start_lockdown_tunnel_macos(self, python_path: str, udid: str) -> Optional[RSDTunnel]:
-        """Start direct lockdown tunnel on macOS."""
-        udid_arg = f" --udid {udid}" if udid else ""
-        script = f'''
-        do shell script "{python_path} -m pymobiledevice3 lockdown start-tunnel{udid_arg} > /tmp/tunnel.log 2>&1 &" with administrator privileges
-        '''
-
-        try:
-            logger.info(f"Requesting admin privileges for lockdown tunnel... (UDID: {udid[:8]})")
-            result = subprocess.run(
-                ["osascript", "-e", script],
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-
-            if result.returncode != 0:
-                stderr = result.stderr or result.stdout
-                if "User canceled" in stderr:
-                    self._last_error = "Admin authentication cancelled"
-                    return None
-
-            time.sleep(3)
-
-            # Try to parse from log file
-            tunnel = self._parse_tunnel_from_log("/tmp/tunnel.log", udid)
-            if tunnel:
-                return tunnel
-
-            # Try tunneld query
-            return self._wait_for_tunnel(max_wait=5, udid=udid)
-
-        except subprocess.TimeoutExpired:
-            self._last_error = "Timeout waiting for admin authentication"
-            return None
-        except Exception as e:
-            self._last_error = str(e)
-            return None
-
-    def _start_tunnel_linux(self, udid: str) -> Optional[RSDTunnel]:
-        """Start tunnel on Linux using pkexec."""
-        python_path = self._find_python_with_pymobiledevice3()
-
-        try:
-            subprocess.Popen(
-                ["pkexec", python_path, "-m", "pymobiledevice3", "remote", "tunneld", "-d"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-
-            return self._wait_for_tunnel(max_wait=10, udid=udid)
-
-        except Exception as e:
-            self._last_error = str(e)
-            return None
-
-    # =========================================================================
-    # Stop Tunnel
-    # =========================================================================
-
-    def _stop_tunnel_macos(self) -> None:
-        """Stop tunnel processes on macOS."""
-        for pattern in ["pymobiledevice3.*start-tunnel", "pymobiledevice3.*tunneld"]:
-            try:
-                subprocess.run(["pkill", "-f", pattern], capture_output=True)
-            except Exception:
-                pass
-
-        # Try with admin privileges
-        script = '''
-        do shell script "pkill -f 'pymobiledevice3.*tunneld' ; pkill -f 'pymobiledevice3.*start-tunnel' ; exit 0" with administrator privileges
-        '''
-        try:
-            subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10)
+            url = f"http://127.0.0.1:{TUNNELD_DEFAULT_PORT}/"
+            req = urllib.request.Request(url, method='GET')
+            req.add_header('Accept', 'application/json')
+            with urllib.request.urlopen(req, timeout=TUNNELD_QUERY_TIMEOUT) as response:
+                response.read()
+            return True
         except Exception:
             pass
 
-    def _stop_tunnel_linux(self) -> None:
-        """Stop tunnel processes on Linux."""
-        for pattern in ["pymobiledevice3.*start-tunnel", "pymobiledevice3.*tunneld"]:
-            try:
-                subprocess.run(["pkill", "-f", pattern], capture_output=True)
-            except Exception:
-                pass
+        # Fallback: platform-specific process check
+        try:
+            if sys.platform == "win32":
+                result = subprocess.run(
+                    ["wmic", "process", "where", "name='python.exe'", "get", "commandline"],
+                    capture_output=True, text=True, timeout=5,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+                return "tunneld" in result.stdout
+            else:
+                result = subprocess.run(
+                    ["pgrep", "-f", "pymobiledevice3.*tunneld"],
+                    capture_output=True, text=True, timeout=5
+                )
+                return result.returncode == 0
+        except Exception:
+            return False
 
     # =========================================================================
     # Helpers
     # =========================================================================
 
-    def _wait_for_tunnel(self, max_wait: int = 10, udid: str = None) -> Optional[RSDTunnel]:
-        """Poll for tunnel to become available."""
-        logger.info(f"Waiting for tunnel (max {max_wait}s)...")
-
-        for i in range(max_wait * 2):  # Poll every 0.5s
-            time.sleep(0.5)
-
-            tunnel = self._query_tunneld_http(udid)
-            if tunnel:
-                logger.info(f"Tunnel found after {(i + 1) * 0.5:.1f}s")
-                return tunnel
-
-        self._last_error = "Tunnel did not become available"
-        return None
-
-    def _parse_tunnel_from_log(self, log_path: str, udid: str) -> Optional[RSDTunnel]:
-        """Parse tunnel info from log file."""
-        try:
-            if not os.path.exists(log_path):
-                return None
-
-            with open(log_path, 'r') as f:
-                content = f.read()
-
-            if not content:
-                return None
-
-            # Pattern: --rsd <address> <port>
-            match = re.search(r'--rsd\s+([a-fA-F0-9:]+)\s+(\d+)', content)
-            if match:
-                return RSDTunnel(
-                    address=match.group(1),
-                    port=int(match.group(2)),
-                    udid=udid
-                )
-
-            return None
-        except Exception:
-            return None
-
     def _find_python_with_pymobiledevice3(self) -> str:
         """Find Python installation with pymobiledevice3."""
         home = os.path.expanduser("~")
-        candidates = [
-            sys.executable,
-            f"{home}/.asdf/shims/python3",
-            f"{home}/.pyenv/shims/python3",
-            "/opt/homebrew/bin/python3",
-            "/usr/local/bin/python3",
-            "python3",
-        ]
+
+        if sys.platform == "win32":
+            local_app_data = os.environ.get("LOCALAPPDATA", "")
+            candidates = [
+                sys.executable,
+                os.path.join(local_app_data, "Programs", "Python", "Python313", "python.exe"),
+                os.path.join(local_app_data, "Programs", "Python", "Python312", "python.exe"),
+                os.path.join(local_app_data, "Programs", "Python", "Python311", "python.exe"),
+                f"{home}\\.pyenv\\pyenv-win\\shims\\python",
+                "python",
+            ]
+            fallback = "python"
+        else:
+            candidates = [
+                sys.executable,
+                f"{home}/.asdf/shims/python3",
+                f"{home}/.pyenv/shims/python3",
+                "/opt/homebrew/bin/python3",
+                "/usr/local/bin/python3",
+                "python3",
+            ]
+            fallback = "python3"
 
         for path in candidates:
             if not path:
                 continue
-            if path != "python3" and not os.path.exists(path):
+            if path not in (fallback,) and not os.path.exists(path):
                 continue
             try:
+                kwargs = {}
+                if sys.platform == "win32":
+                    kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
                 result = subprocess.run(
                     [path, "-c", "import pymobiledevice3; print('ok')"],
                     capture_output=True,
                     text=True,
-                    timeout=5
+                    timeout=5,
+                    **kwargs
                 )
                 if result.returncode == 0 and 'ok' in result.stdout:
                     return path
             except Exception:
                 continue
 
-        return "python3"
+        return fallback

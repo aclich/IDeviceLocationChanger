@@ -28,16 +28,30 @@ class DeviceManager:
         """Get environment with proper PATH for external tools."""
         env = os.environ.copy()
         home = os.path.expanduser("~")
-        additional_paths = [
-            "/opt/homebrew/bin",
-            "/usr/local/bin",
-            f"{home}/.asdf/shims",
-            f"{home}/.pyenv/shims",
-            f"{home}/.local/bin",
-            "/usr/bin",
-            "/bin",
-        ]
-        env["PATH"] = ":".join(additional_paths) + ":" + env.get("PATH", "")
+        sep = ";" if sys.platform == "win32" else ":"
+
+        if sys.platform == "win32":
+            local_app_data = os.environ.get("LOCALAPPDATA", "")
+            additional_paths = [
+                os.path.join(local_app_data, "Programs", "Python", "Python313"),
+                os.path.join(local_app_data, "Programs", "Python", "Python313", "Scripts"),
+                os.path.join(local_app_data, "Programs", "Python", "Python312"),
+                os.path.join(local_app_data, "Programs", "Python", "Python312", "Scripts"),
+                f"{home}\\.pyenv\\pyenv-win\\shims",
+                f"{home}\\AppData\\Roaming\\Python\\Scripts",
+            ]
+        else:
+            additional_paths = [
+                "/opt/homebrew/bin",
+                "/usr/local/bin",
+                f"{home}/.asdf/shims",
+                f"{home}/.pyenv/shims",
+                f"{home}/.local/bin",
+                "/usr/bin",
+                "/bin",
+            ]
+
+        env["PATH"] = sep.join(additional_paths) + sep + env.get("PATH", "")
         return env
 
     def list_devices(self) -> List[Device]:
