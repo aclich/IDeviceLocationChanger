@@ -1,26 +1,4 @@
-# Spec: Device Disconnect
-
-### Requirement: Disconnect button on selected device
-The DevicePanel SHALL display an [X] button on the currently selected device row. Unselected device rows SHALL NOT display the [X] button.
-
-#### Scenario: Device is selected
-- **WHEN** a device is selected in the device list
-- **THEN** an [X] button SHALL appear on that device's row
-
-#### Scenario: Device is not selected
-- **WHEN** a device is not selected
-- **THEN** no [X] button SHALL appear on that device's row
-
-### Requirement: Disconnect confirmation dialog
-When the user clicks the [X] button, the frontend SHALL display a confirmation dialog before proceeding with the disconnect.
-
-#### Scenario: User confirms disconnect
-- **WHEN** the user clicks [X] and confirms the dialog "This will disconnect location simulation for [device name]. Continue?"
-- **THEN** the frontend SHALL call the `disconnectDevice` RPC method with the device ID
-
-#### Scenario: User cancels disconnect
-- **WHEN** the user clicks [X] and cancels the confirmation dialog
-- **THEN** no action SHALL be taken; the device remains selected
+## MODIFIED Requirements
 
 ### Requirement: disconnectDevice RPC method
 The backend SHALL expose a `disconnectDevice` JSON-RPC method that accepts `{deviceId}` and cleans up all active tasks for that device.
@@ -40,6 +18,18 @@ The backend SHALL expose a `disconnectDevice` JSON-RPC method that accepts `{dev
 #### Scenario: Disconnect device with no active tasks
 - **WHEN** `disconnectDevice` is called for a device with no active cruise, route, or location
 - **THEN** the backend SHALL return success (no-op cleanup is not an error)
+
+## REMOVED Requirements
+
+### Requirement: Disconnect clears selected device
+**Reason**: The `_selected_device` singleton is removed. There is no backend-side "selected device" to clear.
+**Migration**: Frontend manages selected device state locally. Disconnect clears frontend `selectedDevice` state directly.
+
+### Requirement: Frontend state reset after disconnect
+**Reason**: Replaced by new requirement below that accounts for badge state cleanup.
+**Migration**: See new ADDED requirement.
+
+## ADDED Requirements
 
 ### Requirement: Frontend state reset after disconnect
 After a successful `disconnectDevice` response, the frontend SHALL reset all device-related UI state and clear the badge for that device.

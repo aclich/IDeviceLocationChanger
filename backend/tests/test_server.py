@@ -90,40 +90,126 @@ class TestListDevices:
         assert response["result"]["devices"] == []
 
 
-class TestSelectDevice:
-    """Tests for selectDevice RPC method."""
+class TestSelectDeviceRemoved:
+    """Tests that selectDevice RPC method has been removed."""
 
-    async def test_select_device_success(self, server):
-        mock_device = Device(
-            id="device-123",
-            name="Test iPhone",
-            type=DeviceType.PHYSICAL,
-            state=DeviceState.CONNECTED,
-        )
-        server.devices.get_device = MagicMock(return_value=mock_device)
-
+    async def test_select_device_method_not_found(self, server):
         request = {"id": "1", "method": "selectDevice", "params": {"deviceId": "device-123"}}
         response = await server.handle_request(request)
 
-        assert response["result"]["success"] is True
-        assert response["result"]["device"]["id"] == "device-123"
-        assert server._selected_device == mock_device
+        assert "error" in response
+        assert response["error"]["code"] == -32601
 
-    async def test_select_device_missing_id(self, server):
-        request = {"id": "1", "method": "selectDevice", "params": {}}
+
+class TestGetDeviceState:
+    """Tests for getDeviceState RPC method."""
+
+    async def test_get_device_state_idle(self, server):
+        """Idle device returns null for cruise/route, location from LastLocationService."""
+        server.location._last_locations = {}
+        server.last_locations.get = MagicMock(return_value={"lat": 25.033, "lon": 121.565})
+        server.cruise.get_cruise_status = MagicMock(return_value={"state": "idle", "deviceId": "dev-1"})
+        server.route.get_route = MagicMock(return_value=None)
+        server.route.get_route_session = MagicMock(return_value=None)
+        server.devices.get_device = MagicMock(return_value=None)
+        server.location._refresh_tasks = {}
+
+        request = {"id": "1", "method": "getDeviceState", "params": {"deviceId": "dev-1"}}
         response = await server.handle_request(request)
 
-        assert response["result"]["success"] is False
+        result = response["result"]
+        assert result["location"]["latitude"] == 25.033
+        assert result["cruise"] is None
+        assert result["route"] is None
+        assert result["routeCruise"] is None
+        assert result["isRefreshing"] is False
+
+    async def test_get_device_state_with_cruise(self, server):
+        """Device with active cruise returns cruise data."""
+        cruise_data = {"state": "running", "deviceId": "dev-1", "speedKmh": 80}
+        server.location._last_locations = {"dev-1": {"lat": 25.0, "lon": 121.0}}
+        server.last_locations.get = MagicMock(return_value=None)
+        server.cruise.get_cruise_status = MagicMock(return_value=cruise_data)
+        server.route.get_route = MagicMock(return_value=None)
+        server.route.get_route_session = MagicMock(return_value=None)
+        server.devices.get_device = MagicMock(return_value=None)
+        server.location._refresh_tasks = {"dev-1": {}}
+
+        request = {"id": "1", "method": "getDeviceState", "params": {"deviceId": "dev-1"}}
+        response = await server.handle_request(request)
+
+        result = response["result"]
+        assert result["cruise"]["state"] == "running"
+        assert result["cruise"]["speedKmh"] == 80
+        assert result["isRefreshing"] is True
+
+    async def test_get_device_state_missing_device_id(self, server):
+        request = {"id": "1", "method": "getDeviceState", "params": {}}
+        response = await server.handle_request(request)
+
         assert "deviceId required" in response["result"]["error"]
 
-    async def test_select_device_not_found(self, server):
+    async def test_get_device_state_no_state(self, server):
+        """Device with no state at all returns all nulls."""
+        server.location._last_locations = {}
+        server.last_locations.get = MagicMock(return_value=None)
+        server.cruise.get_cruise_status = MagicMock(return_value={"state": "idle", "deviceId": "dev-1"})
+        server.route.get_route = MagicMock(return_value=None)
+        server.route.get_route_session = MagicMock(return_value=None)
         server.devices.get_device = MagicMock(return_value=None)
+        server.location._refresh_tasks = {}
 
-        request = {"id": "1", "method": "selectDevice", "params": {"deviceId": "nonexistent"}}
+        request = {"id": "1", "method": "getDeviceState", "params": {"deviceId": "dev-1"}}
         response = await server.handle_request(request)
 
-        assert response["result"]["success"] is False
-        assert "not found" in response["result"]["error"]
+        result = response["result"]
+        assert result["location"] is None
+        assert result["cruise"] is None
+
+
+class TestGetAllDeviceStates:
+    """Tests for getAllDeviceStates RPC method."""
+
+    async def test_empty_states(self, server):
+        """No active devices returns empty dict."""
+        server.cruise._sessions = {}
+        server.cruise._sessions_lock = MagicMock()
+        server.cruise._sessions_lock.__enter__ = MagicMock()
+        server.cruise._sessions_lock.__exit__ = MagicMock(return_value=False)
+        server.route._sessions = {}
+
+        request = {"id": "1", "method": "getAllDeviceStates", "params": {}}
+        response = await server.handle_request(request)
+
+        assert response["result"] == {}
+
+    async def test_with_active_sessions(self, server):
+        """Active cruise and route sessions return badge data."""
+        from unittest.mock import PropertyMock
+        import threading
+
+        # Mock cruise session
+        cruise_session = MagicMock()
+        cruise_session.state = MagicMock()
+        cruise_session.state.value = "running"
+        server.cruise._sessions = {"dev-a": cruise_session}
+        server.cruise._sessions_lock = threading.Lock()
+
+        # Mock route session
+        route_session = MagicMock()
+        route_session.state = MagicMock()
+        route_session.state.value = "running"
+        route_session.current_segment_index = 2
+        route_session.route.segments = [1, 2, 3, 4, 5]  # 5 segments
+        server.route._sessions = {"dev-b": route_session}
+
+        request = {"id": "1", "method": "getAllDeviceStates", "params": {}}
+        response = await server.handle_request(request)
+
+        result = response["result"]
+        assert result["dev-a"]["cruising"] is True
+        assert result["dev-b"]["routeCruising"] is True
+        assert result["dev-b"]["routeProgress"] == "2/5"
 
 
 class TestSetLocation:
@@ -136,8 +222,6 @@ class TestSetLocation:
             type=DeviceType.PHYSICAL,
             state=DeviceState.CONNECTED,
         )
-        mock_tunnel = MagicMock()
-        server._selected_device = mock_device
         server.devices.get_device = MagicMock(return_value=mock_device)
         server.location.set_location = MagicMock(return_value={"success": True})
         server.last_locations.update = MagicMock()
@@ -145,7 +229,7 @@ class TestSetLocation:
         request = {
             "id": "1",
             "method": "setLocation",
-            "params": {"latitude": 25.033, "longitude": 121.565}
+            "params": {"deviceId": "device-123", "latitude": 25.033, "longitude": 121.565}
         }
         response = await server.handle_request(request)
 
@@ -154,9 +238,7 @@ class TestSetLocation:
             mock_device, 25.033, 121.565,
         )
 
-    async def test_set_location_no_device_selected(self, server):
-        server._selected_device = None
-
+    async def test_set_location_no_device_id(self, server):
         request = {
             "id": "1",
             "method": "setLocation",
@@ -165,12 +247,18 @@ class TestSetLocation:
         response = await server.handle_request(request)
 
         assert response["result"]["success"] is False
-        assert "No device selected" in response["result"]["error"]
+        assert "deviceId required" in response["result"]["error"]
 
     async def test_set_location_missing_coordinates(self, server):
-        server._selected_device = MagicMock()
+        mock_device = Device(
+            id="device-123",
+            name="Test iPhone",
+            type=DeviceType.PHYSICAL,
+            state=DeviceState.CONNECTED,
+        )
+        server.devices.get_device = MagicMock(return_value=mock_device)
 
-        request = {"id": "1", "method": "setLocation", "params": {"latitude": 25.033}}
+        request = {"id": "1", "method": "setLocation", "params": {"deviceId": "device-123", "latitude": 25.033}}
         response = await server.handle_request(request)
 
         assert response["result"]["success"] is False
@@ -187,24 +275,21 @@ class TestClearLocation:
             type=DeviceType.PHYSICAL,
             state=DeviceState.CONNECTED,
         )
-        server._selected_device = mock_device
         server.devices.get_device = MagicMock(return_value=mock_device)
         server.location.clear_location = MagicMock(return_value={"success": True})
 
-        request = {"id": "1", "method": "clearLocation", "params": {}}
+        request = {"id": "1", "method": "clearLocation", "params": {"deviceId": "device-123"}}
         response = await server.handle_request(request)
 
         assert response["result"]["success"] is True
         server.location.clear_location.assert_called_once_with(mock_device)
 
-    async def test_clear_location_no_device_selected(self, server):
-        server._selected_device = None
-
+    async def test_clear_location_no_device_id(self, server):
         request = {"id": "1", "method": "clearLocation", "params": {}}
         response = await server.handle_request(request)
 
         assert response["result"]["success"] is False
-        assert "No device selected" in response["result"]["error"]
+        assert "deviceId required" in response["result"]["error"]
 
 
 class TestTunnelOperations:
@@ -232,22 +317,15 @@ class TestTunnelOperations:
         assert response["result"]["state"] == "error"
 
     async def test_old_tunnel_methods_removed(self, server):
-        """startTunnel, stopTunnel, getTunnelStatus are no longer available."""
-        for method in ["startTunnel", "stopTunnel", "getTunnelStatus"]:
+        """startTunnel, stopTunnel, getTunnelStatus, selectDevice are no longer available."""
+        for method in ["startTunnel", "stopTunnel", "getTunnelStatus", "selectDevice"]:
             request = {"id": "1", "method": method, "params": {}}
             response = await server.handle_request(request)
             assert "error" in response
             assert response["error"]["code"] == -32601
 
     async def test_disconnect_device(self, server):
-        """disconnectDevice clears active tasks and selected device."""
-        mock_device = Device(
-            id="device-123",
-            name="Test iPhone",
-            type=DeviceType.PHYSICAL,
-            state=DeviceState.CONNECTED,
-        )
-        server._selected_device = mock_device
+        """disconnectDevice clears active tasks for the device."""
         server.cruise.stop_cruise = MagicMock(return_value={"success": True})
         server.route.stop_route_cruise = MagicMock(return_value={"success": True})
         server.location.close_connection = MagicMock()
@@ -256,7 +334,6 @@ class TestTunnelOperations:
         response = await server.handle_request(request)
 
         assert response["result"]["success"] is True
-        assert server._selected_device is None
         server.cruise.stop_cruise.assert_called_once_with("device-123")
         server.route.stop_route_cruise.assert_called_once_with("device-123")
         server.location.close_connection.assert_called_once_with("device-123")

@@ -133,6 +133,26 @@ Only one cruise type (regular or route) can be active at a time. Switching betwe
 - **WHEN** route cruise is running on device A
 - **AND** user switches to device B in the UI
 - **THEN** route cruise continues running on device A in the backend (not paused or stopped)
-- **AND** UI reflects device B's state (no route cruise shown unless B has one)
-- **AND** switching back to device A restores the route cruise UI state
-- **NOTE:** Per-device independent route cruises are a future enhancement. For MVP, only one route can be managed in the frontend UI at a time, but the backend keeps the session alive
+- **AND** UI reflects device B's state from `getDeviceState` query
+- **AND** switching back to device A restores the route cruise UI state via `getDeviceState`
+- **AND** SSE events for device A's route cruise update badge state (not full UI state) while device B is selected
+
+---
+
+### Requirement: Route mode auto-activates on device switch
+When switching to a device that has route state (definition or active cruise), the UI SHALL automatically enter Route mode.
+
+#### Scenario: Switch to device with route definition
+- **WHEN** the user switches to a device that has a route definition with waypoints
+- **AND** the device is NOT actively route cruising
+- **THEN** the UI SHALL switch to Route mode
+- **AND** the route waypoints and polylines SHALL be displayed on the map
+
+#### Scenario: Switch to device with active route cruise
+- **WHEN** the user switches to a device that has an active route cruise
+- **THEN** the UI SHALL switch to Route mode
+- **AND** the route cruise progress SHALL be displayed
+
+#### Scenario: Switch to device with no route
+- **WHEN** the user switches to a device that has no route definition
+- **THEN** the route mode toggle SHALL NOT be changed (keep current mode)

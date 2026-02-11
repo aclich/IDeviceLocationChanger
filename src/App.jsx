@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useBackend } from './hooks/useBackend';
 import { useMovement } from './hooks/useMovement';
 import { useFavorites } from './hooks/useFavorites';
@@ -10,6 +10,7 @@ import { RoutePanel } from './components/RoutePanel';
 import { FavoritesManager } from './components/FavoritesManager';
 import { DebugPage } from './components/DebugPage';
 import { distanceBetween } from './utils/coordinateCalculator';
+import { getEmojiPool, pickEmoji } from './utils/statusEmoji';
 import './styles/App.css';
 import './styles/DebugPage.css';
 
@@ -34,6 +35,9 @@ function App() {
     getLastLocation,
     retryTunneld,
     clearError,
+    badgeMap,
+    deviceSwitchLoading,
+    seedBadges,
     // Cruise operations (run in backend)
     startCruise: backendStartCruise,
     stopCruise: backendStopCruise,
@@ -54,22 +58,6 @@ function App() {
     clearRoute,
     setRouteLoopMode,
   } = useBackend();
-
-  // Wrap selectDevice to restore last location
-  const selectDevice = useCallback(async (deviceId) => {
-    const response = await selectDeviceRaw(deviceId);
-    if (response?.result?.device) {
-      // Try to restore last location for this device
-      const lastLocResponse = await getLastLocation(deviceId);
-      if (lastLocResponse?.result?.success) {
-        const { latitude, longitude } = lastLocResponse.result;
-        // Set it as pending location and fly to it
-        setPendingLocation({ latitude, longitude });
-        setFlyToLocation({ latitude, longitude, timestamp: Date.now() });
-      }
-    }
-    return response;
-  }, [selectDeviceRaw, getLastLocation]);
 
   // Joystick movement control (runs in frontend - requires real-time input)
   const {
@@ -134,11 +122,50 @@ function App() {
     importFavorites,
   } = useFavorites();
 
+  // Seed badge map on initial load
+  useEffect(() => {
+    seedBadges();
+  }, [seedBadges]);
+
   const [pendingLocation, setPendingLocation] = useState(null);
   const [showDebug, setShowDebug] = useState(false);
   const [showFavoritesManager, setShowFavoritesManager] = useState(false);
   const [flyToLocation, setFlyToLocation] = useState(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [controlPanelMode, setControlPanelMode] = useState(null);
+
+  // Wrap selectDevice to handle auto-mode switch, speed, and map fly
+  const selectDevice = useCallback(async (deviceId) => {
+    const response = await selectDeviceRaw(deviceId);
+    if (response?.result) {
+      const state = response.result;
+
+      // Auto UI mode switch based on device state
+      if (state.route || state.routeCruise) {
+        setRouteMode(true);
+        setControlPanelMode('route');
+      } else if (state.cruise) {
+        setRouteMode(false);
+        setControlPanelMode('cruise');
+      }
+      // Idle device → keep current mode (no change)
+
+      // Update speed from device's active speed
+      if (state.cruise?.speedKmh) {
+        setSpeed(state.cruise.speedKmh);
+      } else if (state.routeCruise?.speedKmh) {
+        setSpeed(state.routeCruise.speedKmh);
+      }
+      // Else: keep current slider value
+
+      // Fly map to the device's location
+      const loc = state.location;
+      if (loc) {
+        setFlyToLocation({ latitude: loc.latitude, longitude: loc.longitude, timestamp: Date.now() });
+      }
+    }
+    return response;
+  }, [selectDeviceRaw, setRouteMode, setSpeed]);
 
   const handleMapClick = useCallback((lat, lng) => {
     setPendingLocation({ latitude: lat, longitude: lng });
@@ -187,6 +214,7 @@ function App() {
   const handleModeChange = useCallback((newMode) => {
     const wasRouteMode = routeMode;
     setRouteMode(newMode === 'route');
+    setControlPanelMode(null); // Clear forced mode on manual change
 
     // Auto-pause route cruise when switching away from route mode
     if (wasRouteMode && newMode !== 'route' && isRouteCruising && !isRoutePaused) {
@@ -253,6 +281,95 @@ function App() {
     return { eta, distance: dist, isPaused };
   }, [isCruising, cruiseStatus, speed]);
 
+  // Determine status bar mode for emoji selection
+  const statusMode = useMemo(() => {
+    if (!selectedDevice) return 'noDevice';
+    if (isRouteCruising && isRoutePaused) return 'routePaused';
+    if (isRouteCruising) return 'routeCruising';
+    if (isCruising && cruiseInfo?.isPaused) return 'paused';
+    if (isCruising) return 'cruising';
+    if (location) return 'idleWithLocation';
+    return 'idle';
+  }, [selectedDevice, isRouteCruising, isRoutePaused, isCruising, cruiseInfo?.isPaused, location]);
+
+  // Get current emoji pool and compute a stable pool key for change detection
+  const emojiPool = useMemo(() => getEmojiPool(statusMode, speed, location?.latitude ?? 0), [statusMode, speed, location?.latitude]);
+  const poolKey = useMemo(() => emojiPool.join(''), [emojiPool]);
+
+  // Emoji state with 30s rotation
+  const [statusEmoji, setStatusEmoji] = useState(() => pickEmoji(getEmojiPool('noDevice')));
+  const poolKeyRef = useRef(poolKey);
+
+  useEffect(() => {
+    // Pick new emoji immediately when pool changes
+    if (poolKeyRef.current !== poolKey) {
+      poolKeyRef.current = poolKey;
+      setStatusEmoji(pickEmoji(emojiPool));
+    }
+    // Set up 30s rotation
+    const timer = setInterval(() => {
+      setStatusEmoji(pickEmoji(emojiPool));
+    }, 30000);
+    return () => clearInterval(timer);
+  }, [poolKey, emojiPool]);
+
+  // Build contextual status bar text
+  const statusBarText = useMemo(() => {
+    const name = selectedDevice?.name;
+    switch (statusMode) {
+      case 'noDevice':
+        return 'No device selected';
+      case 'idle':
+        return name;
+      case 'idleWithLocation':
+        return `${name} · ${location.latitude.toFixed(6)}, ${location.longitude.toFixed(6)}`;
+      case 'cruising':
+        return cruiseInfo
+          ? `${name} · ${cruiseInfo.distance} rem · ETA ${cruiseInfo.eta} · ${speed.toFixed(1)} km/h`
+          : name;
+      case 'paused':
+        return cruiseInfo
+          ? `${name} · Paused · ${cruiseInfo.distance} rem · ETA ${cruiseInfo.eta} · ${speed.toFixed(1)} km/h`
+          : name;
+      case 'routeCruising':
+        if (!routeProgressInfo) return name;
+        return `${name} · Seg ${routeProgressInfo.currentSegment}/${routeProgressInfo.totalSegments} · ${routeProgressInfo.remainingKm < 1 ? `${(routeProgressInfo.remainingKm * 1000).toFixed(0)}m` : `${routeProgressInfo.remainingKm.toFixed(1)}km`} rem · ${speed.toFixed(1)} km/h`;
+      case 'routePaused':
+        if (!routeProgressInfo) return name;
+        return `${name} · Route Paused · Seg ${routeProgressInfo.currentSegment}/${routeProgressInfo.totalSegments} · ${routeProgressInfo.remainingKm < 1 ? `${(routeProgressInfo.remainingKm * 1000).toFixed(0)}m` : `${routeProgressInfo.remainingKm.toFixed(1)}km`} rem · ${speed.toFixed(1)} km/h`;
+      default:
+        return name || 'No device selected';
+    }
+  }, [statusMode, selectedDevice?.name, location, cruiseInfo, speed, routeProgressInfo]);
+
+  // Bounce-scroll: measure overflow and set CSS custom property
+  const statusBarRef = useRef(null);
+  const statusTextRef = useRef(null);
+
+  useEffect(() => {
+    const container = statusBarRef.current;
+    const text = statusTextRef.current;
+    if (!container || !text) return;
+
+    const measure = () => {
+      const overflow = text.scrollWidth - container.clientWidth;
+      if (overflow > 0) {
+        text.style.setProperty('--scroll-distance', `-${overflow}px`);
+        text.classList.add('bounce-scroll');
+      } else {
+        text.classList.remove('bounce-scroll');
+      }
+    };
+
+    measure();
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    observer.observe(text);
+
+    return () => observer.disconnect();
+  }, [statusBarText, statusEmoji]);
+
   return (
     <div className="app">
       {/* Titlebar drag region for macOS */}
@@ -295,6 +412,13 @@ function App() {
       {/* Simulator view - hidden when debug is active but stays mounted to preserve map state */}
       <div style={{ display: showDebug ? 'none' : 'contents' }}>
         <div className="main-content">
+          {/* Loading overlay during device switch */}
+          {deviceSwitchLoading && (
+            <div className="device-switch-overlay">
+              <div className="device-switch-spinner">Switching device...</div>
+            </div>
+          )}
+
           {/* Left side - Map */}
           <div className="map-container">
             <MapWidget
@@ -327,6 +451,7 @@ function App() {
               tunnelStatus={tunnelStatus}
               tunneldState={tunneldState}
               onRetryTunneld={retryTunneld}
+              badgeMap={badgeMap}
             />
 
             <ControlPanel
@@ -355,6 +480,7 @@ function App() {
               onManageFavorites={() => setShowFavoritesManager(true)}
               canSaveLocation={!!(pendingLocation || location)}
               hasSelectedLocation={!!pendingLocation}
+              externalMode={controlPanelMode}
             />
 
             <RoutePanel
@@ -383,27 +509,10 @@ function App() {
         </div>
 
         {/* Status bar */}
-        <div className="status-bar">
-          <span>
-            {selectedDevice
-              ? `Selected: ${selectedDevice.name}`
-              : 'No device selected'}
+        <div className="status-bar" ref={statusBarRef}>
+          <span className="status-bar-text" ref={statusTextRef}>
+            {statusEmoji} {statusBarText}
           </span>
-          {location && (
-            <span>
-              Location: {location.latitude.toFixed(6)}, {location.longitude.toFixed(6)}
-            </span>
-          )}
-          {isCruising && cruiseInfo && (
-            <span>
-              {cruiseInfo.isPaused ? 'Paused' : 'Cruising'}: {cruiseInfo.distance} remaining • ETA {cruiseInfo.eta} • {speed.toFixed(1)} km/h
-            </span>
-          )}
-          {isRouteCruising && routeProgressInfo && (
-            <span>
-              {isRoutePaused ? 'Route Paused' : 'Route Cruising'}: Seg {routeProgressInfo.currentSegment}/{routeProgressInfo.totalSegments} • {(routeProgressInfo.remainingKm < 1 ? `${(routeProgressInfo.remainingKm * 1000).toFixed(0)}m` : `${routeProgressInfo.remainingKm.toFixed(1)}km`)} remaining
-            </span>
-          )}
         </div>
       </div>
 

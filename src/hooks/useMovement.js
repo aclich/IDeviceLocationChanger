@@ -148,7 +148,7 @@ export function useMovement({ location, setLocation }) {
   // =========================================================================
 
   const updateSpeed = useCallback((newSpeed) => {
-    setSpeed(Math.max(1, Math.min(50, newSpeed)));
+    setSpeed(Math.max(0.1, newSpeed));
   }, []);
 
   // =========================================================================

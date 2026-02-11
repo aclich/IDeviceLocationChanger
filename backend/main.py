@@ -76,16 +76,16 @@ class LocationSimulatorServer:
         self.route.set_event_emitter(self._emit_event)
 
         # State
-        self._selected_device: Optional[Device] = None
         self._request_count = 0
 
         # Method registry
         self._methods = {
             "listDevices": self._list_devices,
-            "selectDevice": self._select_device,
             "setLocation": self._set_location,
             "clearLocation": self._clear_location,
             "retryTunneld": self._retry_tunneld,
+            "getDeviceState": self._get_device_state,
+            "getAllDeviceStates": self._get_all_device_states,
             "disconnectDevice": self._disconnect_device,
             # Favorites
             "getFavorites": self._get_favorites,
@@ -175,8 +175,6 @@ class LocationSimulatorServer:
         """
         device = self.devices.get_device(device_id)
         if not device:
-            device = self._selected_device
-        if not device:
             return {"success": False, "error": "Device not found"}
 
         result = self.location.set_location(device, latitude, longitude)
@@ -193,7 +191,7 @@ class LocationSimulatorServer:
 
     # Methods that do blocking I/O and need run_in_executor
     _BLOCKING_METHODS = {
-        "listDevices", "selectDevice", "setLocation", "clearLocation",
+        "listDevices", "setLocation", "clearLocation",
         "retryTunneld", "disconnectDevice",
         "startCruise", "stopCruise", "pauseCruise", "resumeCruise",
         "startRouteCruise", "stopRouteCruise", "pauseRouteCruise", "resumeRouteCruise",
@@ -253,10 +251,11 @@ class LocationSimulatorServer:
             device_list.append(d_dict)
         return {"devices": device_list}
 
-    def _select_device(self, params: dict) -> dict:
-        """Select a device for location simulation.
+    def _set_location(self, params: dict) -> dict:
+        """Set location on a device.
 
-        Enriches response with tunnel info for physical devices.
+        No tunneld query here — LocationService manages connections
+        internally and only queries tunneld on retry after failure.
         """
         device_id = params.get("deviceId")
         if not device_id:
@@ -265,35 +264,6 @@ class LocationSimulatorServer:
         device = self.devices.get_device(device_id)
         if not device:
             return {"success": False, "error": f"Device not found: {device_id}"}
-
-        self._selected_device = device
-        result = {"success": True, "device": device.to_dict()}
-
-        tunnel_info = self._get_tunnel_info_for_device(device)
-        if tunnel_info is not None:
-            result["tunnel"] = tunnel_info
-
-        return result
-
-    def _set_location(self, params: dict) -> dict:
-        """Set location on selected device.
-
-        Accepts either deviceId parameter or uses selected device.
-        No tunneld query here — LocationService manages connections
-        internally and only queries tunneld on retry after failure.
-        """
-        # Get device from params or fallback to selected device
-        device_id = params.get("deviceId")
-        if device_id:
-            device = self.devices.get_device(device_id)
-            if not device:
-                return {"success": False, "error": f"Device not found: {device_id}"}
-        elif self._selected_device:
-            device = self.devices.get_device(self._selected_device.id)
-            if not device:
-                device = self._selected_device
-        else:
-            return {"success": False, "error": "No device selected"}
 
         latitude = params.get("latitude")
         longitude = params.get("longitude")
@@ -314,22 +284,14 @@ class LocationSimulatorServer:
         return result
 
     def _clear_location(self, params: dict) -> dict:
-        """Clear simulated location on selected device.
-
-        Accepts either deviceId parameter or uses selected device.
-        """
-        # Get device from params or fallback to selected device
+        """Clear simulated location on a device."""
         device_id = params.get("deviceId")
-        if device_id:
-            device = self.devices.get_device(device_id)
-            if not device:
-                return {"success": False, "error": f"Device not found: {device_id}"}
-        elif self._selected_device:
-            device = self.devices.get_device(self._selected_device.id)
-            if not device:
-                device = self._selected_device
-        else:
-            return {"success": False, "error": "No device selected"}
+        if not device_id:
+            return {"success": False, "error": "deviceId required"}
+
+        device = self.devices.get_device(device_id)
+        if not device:
+            return {"success": False, "error": f"Device not found: {device_id}"}
 
         result = self.location.clear_location(device)
 
@@ -374,6 +336,105 @@ class LocationSimulatorServer:
             }
         return {"status": "no_tunnel"}
 
+    def _get_device_state(self, params: dict) -> dict:
+        """Get aggregated state for a device.
+
+        Returns location, cruise, route, route cruise, and tunnel state
+        in a single response. Used by frontend on device switch.
+        """
+        device_id = params.get("deviceId")
+        if not device_id:
+            return {"error": "deviceId required"}
+
+        # Location: prefer LocationService's live position, fall back to LastLocationService
+        loc = self.location._last_locations.get(device_id)
+        if loc:
+            location = {"latitude": loc["lat"], "longitude": loc["lon"]}
+        else:
+            last = self.last_locations.get(device_id)
+            if last:
+                location = {"latitude": last["lat"], "longitude": last["lon"]}
+            else:
+                location = None
+
+        # Cruise status
+        cruise = self.cruise.get_cruise_status(device_id)
+        if cruise.get("state") == "idle":
+            cruise = None
+
+        # Route definition and route cruise session
+        route = self.route.get_route(device_id)
+        route_cruise = self.route.get_route_session(device_id)
+
+        # Tunnel status
+        tunnel = self._get_tunnel_status_for(device_id)
+
+        # Refresh status
+        is_refreshing = device_id in self.location._refresh_tasks
+
+        return {
+            "location": location,
+            "isRefreshing": is_refreshing,
+            "tunnel": tunnel,
+            "cruise": cruise,
+            "route": route,
+            "routeCruise": route_cruise,
+        }
+
+    def _get_all_device_states(self, params: dict) -> dict:
+        """Get badge-level state for all devices with active tasks.
+
+        Returns a dictionary keyed by deviceId with lightweight status info.
+        Used by frontend to show badges on device list.
+        """
+        states = {}
+
+        # Check cruise sessions
+        with self.cruise._sessions_lock:
+            for device_id, session in self.cruise._sessions.items():
+                if device_id not in states:
+                    states[device_id] = {
+                        "cruising": False,
+                        "cruisePaused": False,
+                        "routeCruising": False,
+                        "routePaused": False,
+                        "routeProgress": None,
+                    }
+                states[device_id]["cruising"] = True
+                states[device_id]["cruisePaused"] = session.state.value == "paused"
+
+        # Check route cruise sessions
+        for device_id, session in self.route._sessions.items():
+            if device_id not in states:
+                states[device_id] = {
+                    "cruising": False,
+                    "cruisePaused": False,
+                    "routeCruising": False,
+                    "routePaused": False,
+                    "routeProgress": None,
+                }
+            states[device_id]["routeCruising"] = True
+            states[device_id]["routePaused"] = session.state.value == "paused"
+            total = len(session.route.segments)
+            current = session.current_segment_index
+            states[device_id]["routeProgress"] = f"{current}/{total}"
+            # Route cruise uses CruiseService internally, so mark cruise flags accordingly
+            states[device_id]["cruising"] = False
+            states[device_id]["cruisePaused"] = False
+
+        return states
+
+    def _get_tunnel_status_for(self, device_id: str) -> Optional[dict]:
+        """Get tunnel status for a specific device by device_id.
+
+        Returns tunnel info dict for physical devices, None for simulators
+        or unknown devices.
+        """
+        device = self.devices.get_device(device_id)
+        if not device:
+            return None
+        return self._get_tunnel_info_for_device(device)
+
     def _disconnect_device(self, params: dict) -> dict:
         """Disconnect a device — stop all active tasks and clear state."""
         device_id = params.get("deviceId")
@@ -386,9 +447,6 @@ class LocationSimulatorServer:
         self.route.stop_route_cruise(device_id)
         # Close location connection
         self.location.close_connection(device_id)
-        # Clear selected device if it matches
-        if self._selected_device and self._selected_device.id == device_id:
-            self._selected_device = None
 
         logger.info(f"Device {device_id[:8]} disconnected")
         return {"success": True}
@@ -451,11 +509,8 @@ class LocationSimulatorServer:
         """Start cruise mode towards a target location."""
         # Get device ID from params or selected device
         device_id = params.get("deviceId")
-        if not device_id and self._selected_device:
-            device_id = self._selected_device.id
-
         if not device_id:
-            return {"success": False, "error": "No device specified"}
+            return {"success": False, "error": "deviceId required"}
 
         # Get coordinates
         start_lat = params.get("startLatitude")
@@ -479,44 +534,32 @@ class LocationSimulatorServer:
     def _stop_cruise(self, params: dict) -> dict:
         """Stop cruise mode."""
         device_id = params.get("deviceId")
-        if not device_id and self._selected_device:
-            device_id = self._selected_device.id
-
         if not device_id:
-            return {"success": False, "error": "No device specified"}
+            return {"success": False, "error": "deviceId required"}
 
         return self.cruise.stop_cruise(device_id)
 
     def _pause_cruise(self, params: dict) -> dict:
         """Pause cruise mode."""
         device_id = params.get("deviceId")
-        if not device_id and self._selected_device:
-            device_id = self._selected_device.id
-
         if not device_id:
-            return {"success": False, "error": "No device specified"}
+            return {"success": False, "error": "deviceId required"}
 
         return self.cruise.pause_cruise(device_id)
 
     def _resume_cruise(self, params: dict) -> dict:
         """Resume paused cruise mode."""
         device_id = params.get("deviceId")
-        if not device_id and self._selected_device:
-            device_id = self._selected_device.id
-
         if not device_id:
-            return {"success": False, "error": "No device specified"}
+            return {"success": False, "error": "deviceId required"}
 
         return self.cruise.resume_cruise(device_id)
 
     def _set_cruise_speed(self, params: dict) -> dict:
         """Set cruise speed."""
         device_id = params.get("deviceId")
-        if not device_id and self._selected_device:
-            device_id = self._selected_device.id
-
         if not device_id:
-            return {"success": False, "error": "No device specified"}
+            return {"success": False, "error": "deviceId required"}
 
         speed = params.get("speedKmh")
         if speed is None:
@@ -527,11 +570,8 @@ class LocationSimulatorServer:
     def _get_cruise_status(self, params: dict) -> dict:
         """Get cruise status for a device."""
         device_id = params.get("deviceId")
-        if not device_id and self._selected_device:
-            device_id = self._selected_device.id
-
         if not device_id:
-            return {"success": False, "error": "No device specified"}
+            return {"success": False, "error": "deviceId required"}
 
         return self.cruise.get_cruise_status(device_id)
 
@@ -608,11 +648,8 @@ class LocationSimulatorServer:
     async def _add_route_waypoint(self, params: dict) -> dict:
         """Add a waypoint to the route."""
         device_id = params.get("deviceId")
-        if not device_id and self._selected_device:
-            device_id = self._selected_device.id
-
         if not device_id:
-            return {"success": False, "error": "No device specified"}
+            return {"success": False, "error": "deviceId required"}
 
         lat = params.get("lat")
         lng = params.get("lng")
@@ -624,22 +661,16 @@ class LocationSimulatorServer:
     async def _undo_route_waypoint(self, params: dict) -> dict:
         """Remove the last waypoint from the route."""
         device_id = params.get("deviceId")
-        if not device_id and self._selected_device:
-            device_id = self._selected_device.id
-
         if not device_id:
-            return {"success": False, "error": "No device specified"}
+            return {"success": False, "error": "deviceId required"}
 
         return await self.route.undo_waypoint(device_id)
 
     def _start_route_cruise(self, params: dict) -> dict:
         """Start route cruise."""
         device_id = params.get("deviceId")
-        if not device_id and self._selected_device:
-            device_id = self._selected_device.id
-
         if not device_id:
-            return {"success": False, "error": "No device specified"}
+            return {"success": False, "error": "deviceId required"}
 
         speed = params.get("speedKmh", 5.0)
         return self.route.start_route_cruise(device_id, float(speed))
@@ -647,44 +678,32 @@ class LocationSimulatorServer:
     def _get_route_status(self, params: dict) -> dict:
         """Get route status for a device."""
         device_id = params.get("deviceId")
-        if not device_id and self._selected_device:
-            device_id = self._selected_device.id
-
         if not device_id:
-            return {"success": False, "error": "No device specified"}
+            return {"success": False, "error": "deviceId required"}
 
         return self.route.get_route_status(device_id)
 
     def _pause_route_cruise(self, params: dict) -> dict:
         """Pause route cruise."""
         device_id = params.get("deviceId")
-        if not device_id and self._selected_device:
-            device_id = self._selected_device.id
-
         if not device_id:
-            return {"success": False, "error": "No device specified"}
+            return {"success": False, "error": "deviceId required"}
 
         return self.route.pause_route_cruise(device_id)
 
     def _resume_route_cruise(self, params: dict) -> dict:
         """Resume route cruise."""
         device_id = params.get("deviceId")
-        if not device_id and self._selected_device:
-            device_id = self._selected_device.id
-
         if not device_id:
-            return {"success": False, "error": "No device specified"}
+            return {"success": False, "error": "deviceId required"}
 
         return self.route.resume_route_cruise(device_id)
 
     async def _reroute_route_cruise(self, params: dict) -> dict:
         """Reroute and resume route cruise from current position."""
         device_id = params.get("deviceId")
-        if not device_id and self._selected_device:
-            device_id = self._selected_device.id
-
         if not device_id:
-            return {"success": False, "error": "No device specified"}
+            return {"success": False, "error": "deviceId required"}
 
         lat = params.get("lat")
         lng = params.get("lng")
@@ -698,22 +717,16 @@ class LocationSimulatorServer:
     def _stop_route_cruise(self, params: dict) -> dict:
         """Stop route cruise."""
         device_id = params.get("deviceId")
-        if not device_id and self._selected_device:
-            device_id = self._selected_device.id
-
         if not device_id:
-            return {"success": False, "error": "No device specified"}
+            return {"success": False, "error": "deviceId required"}
 
         return self.route.stop_route_cruise(device_id)
 
     def _set_route_cruise_speed(self, params: dict) -> dict:
         """Set route cruise speed."""
         device_id = params.get("deviceId")
-        if not device_id and self._selected_device:
-            device_id = self._selected_device.id
-
         if not device_id:
-            return {"success": False, "error": "No device specified"}
+            return {"success": False, "error": "deviceId required"}
 
         speed = params.get("speedKmh")
         if speed is None:
@@ -724,22 +737,16 @@ class LocationSimulatorServer:
     def _clear_route(self, params: dict) -> dict:
         """Clear route for a device."""
         device_id = params.get("deviceId")
-        if not device_id and self._selected_device:
-            device_id = self._selected_device.id
-
         if not device_id:
-            return {"success": False, "error": "No device specified"}
+            return {"success": False, "error": "deviceId required"}
 
         return self.route.clear_route(device_id)
 
     async def _set_route_loop_mode(self, params: dict) -> dict:
         """Toggle route loop mode."""
         device_id = params.get("deviceId")
-        if not device_id and self._selected_device:
-            device_id = self._selected_device.id
-
         if not device_id:
-            return {"success": False, "error": "No device specified"}
+            return {"success": False, "error": "deviceId required"}
 
         enabled = params.get("enabled")
         if enabled is None:
