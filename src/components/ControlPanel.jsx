@@ -63,10 +63,15 @@ export function ControlPanel({
   // Calculate effective max speed based on custom speed setting
   const effectiveMaxSpeed = customSpeedEnabled ? customMaxSpeed : 50;
 
-  // Parse coordinate input like "24.953683, 121.551809"
+  // Parse coordinate input like "24.953683, 121.551809" or "(24.953683, 121.551809)"
   const parseCoordinates = useCallback((input) => {
-    const trimmed = input.trim();
+    let trimmed = input.trim();
     if (!trimmed) return null;
+
+    // Strip surrounding parentheses if present
+    if (trimmed.startsWith('(') && trimmed.endsWith(')')) {
+      trimmed = trimmed.slice(1, -1).trim();
+    }
 
     // Try parsing "lat, lng" format
     const match = trimmed.match(/^(-?\d+\.?\d*)\s*[,\s]\s*(-?\d+\.?\d*)$/);
@@ -92,7 +97,7 @@ export function ControlPanel({
       onDirectInput?.(coords.latitude, coords.longitude);
       setInputError(null);
     } else {
-      setInputError('Invalid format. Use: lat, lng (e.g., 24.953683, 121.551809)');
+      setInputError('Invalid format. Use: lat, lng or (lat, lng)');
     }
   };
 
@@ -272,7 +277,7 @@ export function ControlPanel({
               <input
                 type="text"
                 className="coord-input"
-                placeholder="lat, lng (e.g., 24.953683, 121.551809)"
+                placeholder="lat, lng  e.g. 24.953, 121.551 or (24.953, 121.551)"
                 value={coordInput}
                 onChange={handleCoordInputChange}
                 onKeyDown={handleKeyDown}

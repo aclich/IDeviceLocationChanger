@@ -480,7 +480,6 @@ body {
 
 .coord-input-row {
   display: flex;
-  gap: 8px;
 }
 
 .coord-input {
@@ -488,7 +487,7 @@ body {
   padding: 10px 12px;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 6px 0 0 6px;
   color: var(--text-primary);
   font-size: 13px;
   outline: none;
@@ -505,6 +504,7 @@ body {
 .coord-input-row .btn {
   width: auto;
   padding: 10px 16px;
+  border-radius: 0 6px 6px 0;
 }
 
 .input-error {
@@ -1347,11 +1347,15 @@ body {
   /* Forms - stack vertically */
   .coord-input-row {
     flex-direction: column;
-    gap: 8px;
+  }
+
+  .coord-input {
+    border-radius: 6px 6px 0 0;
   }
 
   .coord-input-row .btn {
     width: 100%;
+    border-radius: 0 0 6px 6px;
   }
 
   .direct-buttons {
